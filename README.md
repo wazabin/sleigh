@@ -1,4 +1,4 @@
-# sleigh
+# wazabin-sleigh
 
 Rust tools for working with [SLEIGH], Ghidra's processor-specification
 language.

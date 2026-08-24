@@ -1,14 +1,17 @@
 [package]
-name = "sleigh"
+name = "wazabin-sleigh"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "SLEIGH processor specification parser and instruction decoder"
 readme = "README.md"
-documentation = "https://docs.rs/sleigh"
+documentation = "https://docs.rs/wazabin-sleigh"
 keywords = ["sleigh", "ghidra", "disassembler", "pcode", "reverse-engineering"]
 categories = ["parser-implementations", "development-tools::debugging", "encoding"]
+
+[lib]
+name = "sleigh"
 
 [[bin]]
 name = "sleigh-decode"

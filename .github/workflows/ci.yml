@@ -14,7 +14,7 @@ concurrency:
 env:
   # Override these repository variables when dependencies are hosted elsewhere.
   JSTD_REPOSITORY: ${{ vars.JSTD_REPOSITORY || format('{0}/jstd', github.repository_owner) }}
-  PCODE_TYPES_REPOSITORY: ${{ vars.PCODE_TYPES_REPOSITORY || format('{0}/pcode-types', github.repository_owner) }}
+  PCODE_TYPES_REPOSITORY: ${{ vars.PCODE_TYPES_REPOSITORY || format('{0}/wazabin-pcode', github.repository_owner) }}
 
 jobs:
   test:

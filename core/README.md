@@ -1,4 +1,4 @@
-# sleigh
+# wazabin-sleigh
 
 A Rust implementation of SLEIGH, the processor-specification language Ghidra
 uses to describe instruction sets. Give it a `.slaspec` and some bytes; it
@@ -69,6 +69,6 @@ and variable-length register lists all work.
 A small command-line decoder ships with the crate:
 
 ```text
-$ cargo run -p sleigh --bin sleigh-decode -- ./src/tests/fixtures/example.sla 108c
+$ cargo run -p wazabin-sleigh --bin sleigh-decode -- ./src/tests/fixtures/example.sla 108c
 [0x0000] and r3,r4
 ```
