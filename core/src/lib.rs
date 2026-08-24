@@ -1,6 +1,6 @@
 #![warn(missing_docs)]
 #![warn(unreachable_pub)]
-#![doc = include_str!("../readme.md")]
+#![doc = include_str!("../README.md")]
 //!
 //! # Pipeline
 //!
