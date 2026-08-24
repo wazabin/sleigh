@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Override these repository variables when dependencies are hosted elsewhere.
+  JSTD_REPOSITORY: ${{ vars.JSTD_REPOSITORY || format('{0}/jstd', github.repository_owner) }}
+  PCODE_TYPES_REPOSITORY: ${{ vars.PCODE_TYPES_REPOSITORY || format('{0}/pcode-types', github.repository_owner) }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out unpublished dependencies
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/../../jstd" "$GITHUB_WORKSPACE/../../wazabin-pcode"
+          git clone --depth=1 "https://github.com/${JSTD_REPOSITORY}.git" \
+            "$GITHUB_WORKSPACE/../../jstd/jstd"
+          git clone --depth=1 "https://github.com/${PCODE_TYPES_REPOSITORY}.git" \
+            "$GITHUB_WORKSPACE/../../wazabin-pcode/pcode-types"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out unpublished dependencies
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/../../jstd" "$GITHUB_WORKSPACE/../../wazabin-pcode"
+          git clone --depth=1 "https://github.com/${JSTD_REPOSITORY}.git" \
+            "$GITHUB_WORKSPACE/../../jstd/jstd"
+          git clone --depth=1 "https://github.com/${PCODE_TYPES_REPOSITORY}.git" \
+            "$GITHUB_WORKSPACE/../../wazabin-pcode/pcode-types"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo llvm-cov --workspace --all-features --fail-under-lines 75 --lcov --output-path lcov.info
+      - run: cargo llvm-cov report --summary-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+          if-no-files-found: error
