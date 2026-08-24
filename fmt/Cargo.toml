@@ -1,0 +1,22 @@
+[package]
+name = "sleigh-fmt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Source formatter for SLEIGH processor specifications"
+readme = "README.md"
+documentation = "https://docs.rs/sleigh-fmt"
+keywords = ["sleigh", "ghidra", "formatter", "reverse-engineering"]
+categories = ["development-tools", "command-line-utilities"]
+
+[lib]
+name = "sleigh_fmt"
+
+[[bin]]
+name = "sleigh-fmt"
+path = "src/bin/main.rs"
+
+[dependencies]
+# The formatter works on specification *text*, so it needs the source AST.
+sleigh = { workspace = true, features = ["unstable-syntax"] }

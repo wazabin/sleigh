@@ -1,0 +1,14 @@
+[x64]
+path = "open_sleigh/src/x86/x86-64.slaspec"
+context = { longMode = 1, addrsize = 2, opsize = 1 }
+
+[x86]
+path = "open_sleigh/src/x86/x86.slaspec"
+context = { addrsize = 1, opsize = 1 }
+
+[riscv]
+path = "open_sleigh/src/RISCV/riscv.lp64d.slaspec"
+context = { MXL = 2 }
+
+[aarch64]
+path = "open_sleigh/src/AARCH64/AARCH64.slaspec"

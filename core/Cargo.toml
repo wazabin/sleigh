@@ -1,0 +1,38 @@
+[package]
+name = "sleigh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "SLEIGH processor specification parser and instruction decoder"
+readme = "README.md"
+documentation = "https://docs.rs/sleigh"
+keywords = ["sleigh", "ghidra", "disassembler", "pcode", "reverse-engineering"]
+categories = ["parser-implementations", "development-tools::debugging", "encoding"]
+
+[[bin]]
+name = "sleigh-decode"
+path = "src/main.rs"
+
+[features]
+# The SLEIGH source AST, for tooling that works on specification text.
+# Exempt from semantic versioning: it mirrors the compiler's front end and
+# changes with it. `sleigh-fmt` is the intended consumer.
+unstable-syntax = []
+
+[dependencies]
+jstd.workspace = true
+pest.workspace = true
+pest_derive.workspace = true
+pcode-types.workspace = true
+serde.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "compile"
+harness = false

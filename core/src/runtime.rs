@@ -1,0 +1,547 @@
+//! Runtime decoding facade for compiled SLEIGH specifications.
+
+use std::{borrow::Cow, fmt};
+
+mod context;
+mod context_db;
+mod effects;
+mod pcode;
+mod refs;
+pub(crate) mod walker;
+
+use self::pcode::pcode_ast_for_instance;
+use crate::{
+    builder::SymbolId,
+    instance::ConstructorInstance,
+    objects::{
+        field::{FieldId, FieldParent},
+        table::TableId,
+    },
+    semantics::{EmitError, InstructionInfo, PcodeAst, SemanticsSink},
+    spec::Spec,
+    token::{BitRangeFieldId, TokenContext},
+};
+pub use context::{Context, ContextBytes, ContextError};
+pub use context_db::ContextDatabase;
+pub use effects::{ContextEffect, ContextScope};
+use pcode_types::RegisterId;
+use pcode_types::SpaceId;
+pub use refs::{FieldRef, RegisterRef, SpaceRef, SymbolKind, SymbolRef, TableRef, TokenRef};
+use serde::{Deserialize, Serialize};
+use walker::Walker;
+
+pub use walker::{DecodeError, DelaySlotError};
+
+/// A compiled SLEIGH specification.
+#[derive(Serialize, Deserialize)]
+pub struct CompiledSpec {
+    spec: Spec,
+    context_len: crate::Size,
+    context_bytes: ContextBytes,
+}
+
+impl CompiledSpec {
+    pub(crate) fn from_spec(spec: Spec) -> Self {
+        let context_len = spec.context_len() as crate::Size;
+        Self {
+            spec,
+            context_len,
+            context_bytes: ContextBytes {
+                bytes: vec![0; context_len as usize],
+            },
+        }
+    }
+
+    fn context_len(&self) -> usize {
+        self.context_len as usize
+    }
+
+    /// Creates a zero-initialized processor context for this specification.
+    pub fn new_context(&self) -> ContextBytes {
+        self.context_bytes.clone()
+    }
+
+    /// Replaces the default processor context this specification decodes with.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContextError::InvalidLength`] if `context_bytes` is not the
+    /// length this specification's context registers require — a buffer built
+    /// with [`ContextBytes::from_raw`] carries no such guarantee.
+    pub fn set_context_bytes(&mut self, context_bytes: ContextBytes) -> Result<(), ContextError> {
+        self.validate_context(&context_bytes)?;
+        self.context_bytes = context_bytes;
+        Ok(())
+    }
+
+    /// Sets a named context field in an owned context buffer.
+    pub fn set_context_field(
+        &self,
+        context: &mut ContextBytes,
+        field: FieldId,
+        value: u64,
+    ) -> Result<(), ContextError> {
+        self.validate_context(context)?;
+
+        if usize::from(field) >= self.spec.fields.len() {
+            return Err(ContextError::UnknownField { field });
+        }
+        let field_ref = self.spec.fields.get(field);
+
+        if field_ref.parent != FieldParent::Context {
+            return Err(ContextError::NotContextField { field });
+        }
+
+        let width = field_ref.width();
+        if width < u64::BITS as usize && value >= (1u64 << width) {
+            return Err(ContextError::ValueOutOfRange {
+                field,
+                width,
+                value,
+            });
+        }
+
+        self.spec
+            .set_context_field(context.as_mut_bytes(), field, value);
+        Ok(())
+    }
+
+    fn validate_context(&self, context: &ContextBytes) -> Result<(), ContextError> {
+        let expected = self.context_len();
+        let actual = context.len();
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(ContextError::InvalidLength { expected, actual })
+        }
+    }
+
+    /// Looks up a register by name.
+    pub fn register(&self, name: &str) -> Option<RegisterRef<'_>> {
+        self.spec
+            .get_register_by_name(name)
+            .map(|register| RegisterRef::new(register.id, register.inner))
+    }
+
+    /// Iterates over registers in stable registry order.
+    pub fn registers(&self) -> impl Iterator<Item = RegisterRef<'_>> {
+        self.spec
+            .registers
+            .iter()
+            .map(|register| RegisterRef::new(register.id, register.inner))
+    }
+
+    /// Looks up a field by name.
+    pub fn field(&self, name: &str) -> Option<FieldRef<'_>> {
+        self.spec
+            .get_field_by_name(name)
+            .map(|field| FieldRef::new(field.id, field.inner))
+    }
+
+    /// Looks up a token by name.
+    pub fn token(&self, name: &str) -> Option<TokenRef<'_>> {
+        self.spec
+            .get_token_by_name(name)
+            .map(|token| TokenRef::new(token.id, token.inner))
+    }
+
+    /// Looks up a constructor table by name.
+    pub fn table(&self, name: &str) -> Option<TableRef<'_>> {
+        if let Some(&SymbolId::Table(id)) = self.spec.symbols.get(name) {
+            Some(TableRef::new(id, &self.spec.trees[id.into()]))
+        } else {
+            None
+        }
+    }
+
+    /// Looks up a memory space by name.
+    pub fn space(&self, name: &str) -> Option<SpaceRef<'_>> {
+        if let Some(&SymbolId::Space(id)) = self.spec.symbols.get(name) {
+            Some(SpaceRef::new(id, &self.spec.spaces[id]))
+        } else {
+            None
+        }
+    }
+
+    /// Iterates over public symbols known to the compiled spec.
+    pub fn symbols(&self) -> impl Iterator<Item = SymbolRef<'_>> {
+        self.spec.symbols.iter().map(|(name, &kind)| SymbolRef {
+            name: name.as_ref(),
+            kind: SymbolKind::from(kind),
+        })
+    }
+
+    /// Returns the parent kind for a named token/context field.
+    pub fn field_parent(&self, name: &str) -> Option<FieldParent> {
+        if let Some(&SymbolId::Field(id)) = self.spec.symbols.get(name) {
+            Some(self.spec.fields[id].parent)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the bit start position for a named token/context field.
+    pub fn field_start(&self, name: &str) -> Option<usize> {
+        if let Some(&SymbolId::Field(id)) = self.spec.symbols.get(name) {
+            Some(self.spec.fields[id].range.start())
+        } else {
+            None
+        }
+    }
+
+    /// Returns the name of the parent token for a named token field.
+    pub fn field_token_name(&self, name: &str) -> Option<&str> {
+        if let Some(&SymbolId::Field(id)) = self.spec.symbols.get(name)
+            && let FieldParent::Token(tok_id) = self.spec.fields[id].parent
+        {
+            return Some(self.spec.token_name(tok_id));
+        }
+        None
+    }
+
+    /// Returns (offset_bits, size_bits) for a named bitrange field.
+    pub fn bitrange_bits(&self, name: &str) -> Option<(usize, usize)> {
+        if let Some(&SymbolId::BitRangeField(id)) = self.spec.symbols.get(name) {
+            let br = &self.spec.bitranges[id];
+            Some((br.offset(), br.size()))
+        } else {
+            None
+        }
+    }
+
+    /// The space that bare addresses in this specification refer to.
+    pub fn default_space(&self) -> SpaceId {
+        self.spec.default_space
+    }
+
+    /// Iterates over memory spaces in stable registry order.
+    ///
+    /// The iteration order matches the [`SpaceId`] numbering, so a consumer can
+    /// rebuild an equivalently-keyed collection by collecting in order.
+    pub fn spaces(&self) -> impl Iterator<Item = SpaceRef<'_>> {
+        self.spec
+            .spaces
+            .iter()
+            .map(|space| SpaceRef::new(space.id, space.inner))
+    }
+
+    /// Iterates over user-defined p-code op names in stable registry order.
+    ///
+    /// These are the `define pcodeop` names; their position is the
+    /// `PCodeOpId` used by [`PcodeAst`] call statements.
+    pub fn pcode_ops(&self) -> impl Iterator<Item = &str> {
+        self.spec.pcode_ops.iter().map(|op| &**op.inner)
+    }
+
+    /// Returns `(parent register, byte start, byte size)` for a bit-range field.
+    pub fn bitrange_info(&self, id: BitRangeFieldId) -> Option<(RegisterId, usize, usize)> {
+        if usize::from(id) >= self.spec.bitranges.len() {
+            return None;
+        }
+        let field = self.spec.bitranges.get(id);
+        Some((field.register, field.offset() / 8, field.size().div_ceil(8)))
+    }
+
+    pub(crate) fn spec(&self) -> &Spec {
+        &self.spec
+    }
+}
+
+impl fmt::Debug for CompiledSpec {
+    /// A summary, not a dump: a compiled specification holds every constructor
+    /// of every table and printing it in full is unreadable and slow.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompiledSpec")
+            .field("tables", &self.spec.trees.len())
+            .field("registers", &self.spec.registers.len())
+            .field("spaces", &self.spec.spaces.len())
+            .field("context_len", &self.context_len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Decoder for a compiled SLEIGH specification.
+pub struct Decoder<'spec> {
+    spec: &'spec CompiledSpec,
+}
+
+impl<'spec> Decoder<'spec> {
+    /// Creates a decoder for `spec`.
+    pub fn new(spec: &'spec CompiledSpec) -> Self {
+        Self { spec }
+    }
+
+    /// Decodes one instruction at `addr` from `bytes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`DecodeError`]: [`NoMatch`] if no constructor matches the
+    /// bytes (including when they run out mid-instruction), [`InvalidContext`]
+    /// if `context` is not this specification's context length,
+    /// [`InvalidAction`] if a disassembly action divides by zero or shifts past
+    /// the word width, and [`AmbiguousMatch`] if several constructors match and
+    /// none is more specific.
+    ///
+    /// [`NoMatch`]: DecodeError::NoMatch
+    /// [`InvalidContext`]: DecodeError::InvalidContext
+    /// [`InvalidAction`]: DecodeError::InvalidAction
+    /// [`AmbiguousMatch`]: DecodeError::AmbiguousMatch
+    ///
+    /// Decoding is pure: `context` is read, never written. An instruction that
+    /// wants to change it for later instructions says so through
+    /// [`Instruction::context_effects`], and [`ContextDatabase`] is the opt-in
+    /// store that feeds those back.
+    ///
+    /// ```
+    /// # use sleigh::{Compiler, Decoder, SourceDb};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut sources = SourceDb::new();
+    /// # let root = sources.add_file("tiny.slaspec", "define endian=little;
+    /// #     define space ram type=ram_space size=4 default;
+    /// #     define space register type=register_space size=4;
+    /// #     define register offset=0 size=4 [ r0 ];
+    /// #     define token instr(8) op=(0,7);
+    /// #     :inc is op=1 { r0 = r0 + 1; }");
+    /// # let spec = Compiler::new(&mut sources).compile(root)?;
+    /// let decoder = Decoder::new(&spec);
+    /// let context = spec.new_context();
+    ///
+    /// // `bytes` is the stream from `addr` on; only what the instruction
+    /// // needs is read, and the rest is left for the next call.
+    /// let instruction = decoder.decode_one(0x1000, &[1, 1, 1], &context)?;
+    /// assert_eq!(instruction.display()?, "inc");
+    /// assert_eq!(instruction.len(), 1);
+    /// assert_eq!(instruction.next_address(), 0x1001);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn decode_one<'bytes>(
+        &self,
+        addr: u64,
+        bytes: &'bytes [u8],
+        context: &ContextBytes,
+    ) -> Result<Instruction<'spec, 'bytes>, DecodeError> {
+        self.spec
+            .validate_context(context)
+            .map_err(|_| DecodeError::InvalidContext)?;
+        let instance = Walker::try_get(
+            addr,
+            bytes,
+            &self.spec.spec,
+            self.spec.context_len(),
+            context.as_bytes(),
+        )?;
+        if instance.size > bytes.len() {
+            return Err(DecodeError::InternalInvariant);
+        }
+        // Covers the delay slot as well, so `Instruction::delay_slots` can hand
+        // each delayed instruction its own bytes. `Instruction::bytes` still
+        // returns only this instruction's.
+        let consumed = instance.size + instance.delay_slot_len;
+        if consumed > bytes.len() {
+            return Err(DecodeError::InternalInvariant);
+        }
+        let raw_bytes = Cow::Borrowed(&bytes[..consumed]);
+        Ok(Instruction {
+            spec: self.spec,
+            instance,
+            raw_bytes,
+        })
+    }
+}
+
+/// Decoded instruction plus access to its compiled specification.
+#[derive(Clone)]
+pub struct Instruction<'spec, 'bytes> {
+    spec: &'spec CompiledSpec,
+    instance: ConstructorInstance,
+    raw_bytes: Cow<'bytes, [u8]>,
+}
+
+impl<'spec, 'bytes> Instruction<'spec, 'bytes> {
+    /// Instruction address.
+    pub fn address(&self) -> u64 {
+        self.instance.inst_start
+    }
+
+    /// Address immediately after this instruction *and its delay slot*.
+    ///
+    /// This is SLEIGH's semantic `inst_next` (manual §7.11): the delay-slot
+    /// bytes belong to this instruction's p-code, so control resumes past them.
+    /// A listing walker that wants the next *encoded* instruction and intends
+    /// to render the delayed ones itself should use
+    /// [`address`](Self::address)` + `[`len`](Self::len) instead; stepping by
+    /// `next_address` skips them, which is correct for a lifter and wrong for a
+    /// disassembly view.
+    pub fn next_address(&self) -> u64 {
+        self.instance.semantic_inst_next()
+    }
+
+    /// Length of this instruction alone, in bytes, excluding its delay slot.
+    pub fn len(&self) -> usize {
+        self.instance.size
+    }
+
+    /// Total length of the instructions filling this one's delay slot.
+    ///
+    /// Zero for everything but a delay-slot branch on MIPS, SPARC, SuperH and
+    /// friends.
+    pub fn delay_slot_len(&self) -> usize {
+        self.instance.delay_slot_len
+    }
+
+    /// The instructions filling this one's delay slot, in address order.
+    ///
+    /// Their p-code is already spliced into
+    /// [`pcode_ast`](Self::pcode_ast) at the point the `delayslot` directive
+    /// sits, so a lifter does not need these — a disassembly listing does.
+    pub fn delay_slots(&self) -> impl Iterator<Item = Instruction<'spec, '_>> + '_ {
+        let mut offset = self.instance.size;
+        self.instance.delay_slots.iter().map(move |delayed| {
+            let start = offset;
+            offset += delayed.size;
+            Instruction {
+                spec: self.spec,
+                instance: delayed.clone(),
+                raw_bytes: Cow::Borrowed(&self.raw_bytes[start..offset]),
+            }
+        })
+    }
+
+    /// Returns true when the instruction has zero encoded bytes.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Encoded bytes of this instruction, excluding its delay slot.
+    pub fn bytes(&self) -> &[u8] {
+        &self.raw_bytes[..self.len()]
+    }
+
+    /// Compiled specification that decoded this instruction.
+    pub fn spec(&self) -> &'spec CompiledSpec {
+        self.spec
+    }
+
+    /// Constructor table that produced this instruction.
+    pub fn constructor_table(&self) -> TableRef<'spec> {
+        TableRef::new(
+            TableId::from(usize::from(self.instance.tree)),
+            &self.spec.spec.trees[self.instance.tree],
+        )
+    }
+
+    /// Index of the matched constructor within its table.
+    pub fn constructor_index(&self) -> usize {
+        self.instance.id.into()
+    }
+
+    /// Number of decoded operand values attached to the matched constructor.
+    pub fn operand_count(&self) -> usize {
+        self.instance.operand_values.len()
+    }
+
+    /// Context changes this instruction's disassembly actions request.
+    ///
+    /// Empty for the vast majority of instructions. Decoding is pure, so a
+    /// caller that wants these to affect later decodes has to remember them —
+    /// [`ContextDatabase`] does that.
+    pub fn context_effects(&self) -> &[ContextEffect] {
+        &self.instance.context_effects
+    }
+
+    /// Renders the SLEIGH display string for this instruction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::UnresolvedDisplay`] if the matched constructor's
+    /// display references a sub-table or field this decode supplies no value
+    /// for, or an attach-table entry that is out of range or unattached.
+    pub fn display(&self) -> Result<String, DecodeError> {
+        self.instance.try_to_string(&self.spec.spec)
+    }
+
+    /// Returns the backend-neutral p-code AST for this instruction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EmitError`] if the matched constructor's semantics cannot
+    /// be expanded — an unresolvable operand, or a construct this crate does
+    /// not yet lower.
+    ///
+    /// The AST is owned and borrows nothing from this instruction or its
+    /// specification, so it outlives both. See the [`semantics`](crate::semantics)
+    /// module for the type graph and what has already been expanded away.
+    ///
+    /// ```
+    /// # use sleigh::{Compiler, Decoder, SourceDb};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut sources = SourceDb::new();
+    /// # let root = sources.add_file("tiny.slaspec", "define endian=little;
+    /// #     define space ram type=ram_space size=4 default;
+    /// #     define space register type=register_space size=4;
+    /// #     define register offset=0 size=4 [ r0 ];
+    /// #     define token instr(8) op=(0,7);
+    /// #     :inc is op=1 { r0 = r0 + 1; }");
+    /// # let spec = Compiler::new(&mut sources).compile(root)?;
+    /// let instruction = Decoder::new(&spec)
+    ///     .decode_one(0x1000, &[1], &spec.new_context())?;
+    ///
+    /// let ast = instruction.pcode_ast()?;
+    /// assert_eq!(ast.pretty_print(&spec), "r0 = (r0 + 1);");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn pcode_ast(&self) -> Result<PcodeAst, EmitError> {
+        pcode_ast_for_instance(&self.spec.spec, &self.instance)
+    }
+
+    /// Emits backend-neutral semantics into `sink`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EmitError`] if the p-code AST cannot be built (see
+    /// [`Instruction::pcode_ast`]) or if `sink` rejects it.
+    pub fn emit_into<S: SemanticsSink>(&self, sink: &mut S) -> Result<(), EmitError> {
+        let info = InstructionInfo {
+            address: self.address(),
+            length: self.len(),
+        };
+        let pcode = self.pcode_ast()?;
+        sink.instruction(&info, &pcode)
+    }
+
+    /// Converts borrowed instruction bytes into owned bytes.
+    pub fn into_owned_bytes(self) -> Instruction<'spec, 'static> {
+        Instruction {
+            spec: self.spec,
+            instance: self.instance,
+            raw_bytes: Cow::Owned(self.raw_bytes.into_owned()),
+        }
+    }
+}
+
+impl fmt::Debug for Instruction<'_, '_> {
+    /// Address, encoding and rendered assembly — enough to identify the
+    /// instruction in a test failure without dumping the whole decode tree.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Instruction")
+            .field("address", &format_args!("{:#x}", self.address()))
+            .field("bytes", &self.bytes())
+            .field("display", &format_args!("{self}"))
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for Instruction<'_, '_> {
+    /// Renders the display string, or the reason it could not be rendered —
+    /// `fmt::Display` has nowhere to report an error, and a silently truncated
+    /// disassembly line would be worse than a visible marker. Use
+    /// [`Instruction::display`] to handle the failure.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.instance.try_to_string(&self.spec.spec) {
+            Ok(text) => f.write_str(&text),
+            Err(err) => write!(f, "<{err}>"),
+        }
+    }
+}

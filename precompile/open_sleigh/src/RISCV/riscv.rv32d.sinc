@@ -1,0 +1,287 @@
+# RV32D  Standard Extension
+
+macro invalidOpForMultD(fr1, fr2) {
+	if ((fr1[0,63] != 0 || fr2[0,63] != 0x7FF0000000000000)
+		&& (fr1[0,63] != 0x7FF0000000000000 || fr2[0,63] != 0)) goto <MULTVALID>;
+	setFflags($(FFLAGNV));
+	<MULTVALID>
+}
+
+macro invalidOpForAddD(fr1, fr2) {
+	if ((fr1 != 0xFFF0000000000000 || fr2 != 0x7FF0000000000000)
+		&& (fr1 != 0x7FF0000000000000 || fr2 != 0xFFF0000000000000)) goto <ADDVALID>;
+	setFflags($(FFLAGNV));
+	<ADDVALID>
+}
+
+# fadd.d D,S,T,m 02000053 fe00007f SIMPLE (0, 0) 
+:fadd.d frd,frs1D,frs2D,FRM is frs1D & frd & frs2D & FRM & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0x1
+{
+	invalidOpForAddD(frs1D, frs2D);
+	frd = frs1D f+ frs2D;
+}
+
+# fclass.d d,S e2001053 fff0707f SIMPLE (0, 0) 
+:fclass.d rd,frs1D is frs1D & rd & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x1 & funct7=0x71 & op2024=0x0
+{
+	rd = 0;
+	rd[0, 1] = frs1D == 0xFFF0000000000000; # - inf
+	rd[1, 1] = frs1D[63,1] == 1 && frs1D[52,11] != 0 && frs1D[52,11] != 0x7ffff; # - norm num
+	rd[2, 1] = frs1D[63,1] == 1 && frs1D[52,11] == 0 && frs1D[0,52] != 0; # - subnorm num
+	rd[3, 1] = frs1D == 0x8000000000000000; # - 0
+	rd[4, 1] = frs1D == 0; # + 0
+	rd[5, 1] = frs1D[63,1] == 0 && frs1D[52,11] != 0 && frs1D[52,11] != 0x3ffff; # + norm num
+	rd[6, 1] = frs1D[63,1] == 0 && frs1D[52,11] == 0 && frs1D[0,52] != 0; # + subnorm num
+	rd[7, 1] = frs1D == 0x7FF0000000000000; # + inf
+	rd[8, 1] = nan(frs1D) && frs1D[51,1] == 0; # snan
+	rd[9, 1] = nan(frs1D) && frs1D[51,1] == 1; # qnan
+
+}
+
+
+# fcvt.d.s D,S 42000053 fff0707f SIMPLE (0, 0) 
+:fcvt.d.s frd,frs1S,FRM is frs1S & frd & FRM & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0x21 & op2024=0x0
+{
+	local tmp:8 = float2float(frs1S);
+	frd = tmp;
+}
+
+
+# fcvt.d.w D,s d2000053 fff0707f SIMPLE (0, 0) 
+:fcvt.d.w frd,rs1W,FRM is frd & rs1W & FRM & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0x69 & op2024=0x0
+{
+	local tmp:8 = int2float(rs1W);
+	frd = tmp;
+}
+
+
+# fcvt.d.wu D,s d2100053 fff0707f SIMPLE (0, 0) 
+:fcvt.d.wu frd,rs1W,FRM is frd & rs1W & FRM & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0x69 & op2024=0x1
+{
+	#ATTN  unsigned can be an issue here
+	local u32:$(XLEN2) = zext(rs1W);
+	local tmp:8 = int2float(u32);
+	frd = tmp;
+}
+
+
+# fcvt.s.d D,S,m 40100053 fff0007f SIMPLE (0, 0) 
+:fcvt.s.d frd,frs1D,FRM is frs1D & frd & FRM & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0x20 & op2024=0x1
+{
+	local tmp:4 = float2float(frs1D);
+	fassignS(frd, tmp);
+}
+
+
+# fcvt.w.d d,S,m c2000053 fff0007f SIMPLE (0, 0) 
+:fcvt.w.d rd,frs1D,FRM is frs1D & FRM & rd & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0x61 & op2024=0x0
+{
+	local low:8 = 0xC1E0000000000000;
+	local high:8 = 0x41E0000000000000;
+	if (frs1D f>= low && frs1D f<= high) goto <VALID>;
+	setFflags($(FFLAGNV));
+	<VALID>
+	local tmp:$(WXLEN) = trunc(frs1D);
+	rd = sext(tmp);
+}
+
+
+# fcvt.wu.d d,S,m c2100053 fff0007f SIMPLE (0, 0) 
+:fcvt.wu.d rd,frs1D,FRM is frs1D & FRM & rd & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0x61 & op2024=0x1
+{
+	local low:8 = 0x0;
+	local high:8 = 0x41F0000000000000;
+	if (frs1D f>= low && frs1D f<= high) goto <VALID>;
+	setFflags($(FFLAGNV));
+	<VALID>
+	local tmp:$(WXLEN) = trunc(frs1D);
+	#TODO  unsigned
+	rd = sext(tmp);
+}
+
+
+# fdiv.d D,S,T,m 1a000053 fe00007f SIMPLE (0, 0) 
+:fdiv.d frd,frs1D,frs2D,FRM is frs1D & frd & frs2D & FRM & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0xd
+{
+	if ((frs1D[0,63] != 0 || frs2D[0,63] != 0)
+		&& (frs1D[0,63] != 0x7FF0000000000000 || frs2D[0,63] != 0x7FF0000000000000)) goto <VALID>;
+	setFflags($(FFLAGNV));
+	<VALID>
+	if (frs1D[52,11] == 0x7ff || frs1D[0,63] == 0 || frs2D[0,63] != 0) goto <NOTDIVZERO>;
+	setFflags($(FFLAGDZ));
+	<NOTDIVZERO>
+	frd = frs1D f/ frs2D;
+}
+
+
+# feq.d d,S,T a2002053 fe00707f SIMPLE (0, 0) 
+:feq.d rd,frs1D,frs2D is frs2D & frs1D & rd & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x2 & funct7=0x51
+{
+	rd = zext(frs1D f== frs2D);
+}
+
+
+# fld D,o(s) 00003007 0000707f QWORD|DREF (0, 8) 
+:fld frd,immI(rs1) is immI & frd & rs1 & op0001=0x3 & op0204=0x1 & op0506=0x0 & funct3=0x3
+{
+	local ea:$(XLEN) = immI + rs1;
+	frd = *[ram]:$(DFLEN) ea;
+}
+
+
+# fle.d d,S,T a2000053 fe00707f SIMPLE (0, 0) 
+:fle.d rd,frs1D,frs2D is frs2D & frs1D & rd & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x0 & funct7=0x51
+{
+	rd = zext(frs1D f<= frs2D);
+}
+
+
+# flt.d d,S,T a2001053 fe00707f SIMPLE (0, 0) 
+:flt.d rd,frs1D,frs2D is frs2D & frs1D & rd & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x1 & funct7=0x51
+{
+	rd = zext(frs1D f< frs2D);
+}
+#endif
+
+
+# fmadd.d D,S,T,R,m 02000043 0600007f SIMPLE (0, 0) 
+:fmadd.d frd,frs1D,frs2D,frs3D,FRM is frs1D & frd & frs2D & FRM & frs3D & op0001=0x3 & op0204=0x0 & op0506=0x2 & op2526=0x1
+{
+	invalidOpForMultD(frs1D, frs2D);
+	local tmp:$(DFLEN) = frs1D f* frs2D;
+	invalidOpForAddD(tmp, frs3D);
+	frd = tmp f+ frs3D;
+}
+
+
+# fmax.d D,S,T 2a001053 fe00707f SIMPLE (0, 0) 
+:fmax.d frd,frs1D,frs2D is frs1D & frd & frs2D & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x1 & funct7=0x15
+{
+	local tmp:$(DFLEN) = frs1D;
+	if (frs1D f> frs2D) goto <WRITE>;
+	if (nan(frs2D)) goto <WRITE>;
+	tmp = frs2D;
+	<WRITE>
+	frd = tmp;
+}
+
+
+# fmin.d D,S,T 2a000053 fe00707f SIMPLE (0, 0) 
+:fmin.d frd,frs1D,frs2D is frs1D & frd & frs2D & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x0 & funct7=0x15
+{
+	local tmp:$(DFLEN) = frs1D;
+	if (frs1D f< frs2D) goto <WRITE>;
+	if (nan(frs2D)) goto <WRITE>;
+	tmp = frs2D;
+	<WRITE>
+	frd = tmp;
+}
+
+
+# fmsub.d D,S,T,R,m 02000047 0600007f SIMPLE (0, 0) 
+:fmsub.d frd,frs1D,frs2D,frs3D,FRM is frs1D & frd & frs2D & FRM & frs3D & op0001=0x3 & op0204=0x1 & op0506=0x2 & op2526=0x1
+{
+	invalidOpForMultD(frs1D, frs2D);
+	local tmp:$(DFLEN) = frs1D f* frs2D;
+	invalidOpForAddD(tmp, f- frs3D);
+	frd = tmp f- frs3D;
+}
+
+
+# fmul.d D,S,T,m 12000053 fe00007f SIMPLE (0, 0) 
+:fmul.d frd,frs1D,frs2D,FRM is frs1D & frd & frs2D & FRM & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0x9
+{
+	invalidOpForMultD(frs1D, frs2D);
+	frd = frs1D f* frs2D;
+}
+
+
+# fnmadd.d D,S,T,R,m 0200004f 0600007f SIMPLE (0, 0) 
+:fnmadd.d frd,frs1D,frs2D,frs3D,FRM is frs1D & frd & frs2D & FRM & frs3D & op0001=0x3 & op0204=0x3 & op0506=0x2 & op2526=0x1
+{
+	invalidOpForMultD(frs1D, frs2D);
+	local tmp:$(DFLEN) = f- (frs1D f* frs2D);
+	invalidOpForAddD(tmp, f- frs3D);
+	frd = tmp f- frs3D;
+}
+
+
+# fnmsub.d D,S,T,R,m 0200004b 0600007f SIMPLE (0, 0) 
+:fnmsub.d frd,frs1D,frs2D,frs3D,FRM is frs1D & frd & frs2D & FRM & frs3D & op0001=0x3 & op0204=0x2 & op0506=0x2 & op2526=0x1
+{
+	invalidOpForMultD(frs1D, frs2D);
+	local tmp:$(DFLEN) = f- (frs1D f* frs2D);
+	invalidOpForAddD(tmp, frs3D);
+	frd = tmp f+ frs3D;
+}
+
+
+# fsd T,q(s) 00003027 0000707f QWORD|DREF (0, 8) 
+:fsd frs2D,immS(rs1) is frs2D & immS & rs1 & op0001=0x3 & op0204=0x1 & op0506=0x1 & funct3=0x3
+{
+	local ea:$(XLEN) = immS + rs1;
+	*[ram]:$(DFLEN) ea = frs2D;
+}
+
+
+# fsgnj.d D,S,T 22000053 fe00707f SIMPLE (0, 0) 
+:fsgnj.d frd,frs1D,frs2D is frs1D & frd & frs2D & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x0 & funct7=0x11
+{
+	local tmp:$(DFLEN) = frs1D;
+	tmp[63,1] = frs2D[63,1];
+	frd = tmp;
+}
+
+# fmv.d D,U 22000053 fe00707f ALIAS (0, 0)
+:fmv.d frd,frs1D is frd & frs1D & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x0 & funct7=0x11 & op1519=op2024
+{
+	frd = frs1D;
+}
+
+
+# fsgnjn.d D,S,T 22001053 fe00707f SIMPLE (0, 0) 
+:fsgnjn.d frd,frs1D,frs2D is frs1D & frd & frs2D & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x1 & funct7=0x11
+{
+	local tmp:$(DFLEN) = frs1D;
+	tmp[63,1] = !frs2D[63,1];
+	frd = tmp;
+}
+
+# fneg.d D,U 22001053 fe00707f ALIAS (0, 0)
+:fneg.d frd,frs1D is frd & frs1D & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x1 & funct7=0x11 & op1519=op2024
+{
+	frd = f- frs1D;
+}
+
+
+# fsgnjx.d D,S,T 22002053 fe00707f SIMPLE (0, 0) 
+:fsgnjx.d frd,frs1D,frs2D is frs1D & frd & frs2D & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x2 & funct7=0x11
+{
+	local tmp:$(DFLEN) = frs1D;
+	tmp[63,1] = tmp[63,1] ^ frs2D[63,1];
+	frd = tmp;
+}
+
+# fabs.d D,U 22002053 fe00707f ALIAS (0, 0)
+:fabs.d frd,frs1D is frd & frs1D & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct3=0x2 & funct7=0x11 & op1519=op2024
+{
+	frd = abs(frs1D);
+}
+
+
+# fsqrt.d D,S,m 5a000053 fff0007f SIMPLE (0, 0) 
+:fsqrt.d frd,frs1D,FRM is frs1D & frd & FRM & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0x2d & op2024=0x0
+{
+	if (nan(frs1D) | frs1D f>= 0) goto <VALID>;
+	setFflags($(FFLAGNV));
+	<VALID>
+	frd = sqrt(frs1D);
+}
+
+
+# fsub.d D,S,T,m 0a000053 fe00007f SIMPLE (0, 0) 
+:fsub.d frd,frs1D,frs2D,FRM is frs1D & frd & frs2D & FRM & op0001=0x3 & op0204=0x4 & op0506=0x2 & funct7=0x5
+{
+	invalidOpForAddD(frs1D, f- frs2D);
+	frd = frs1D f- frs2D;
+}
