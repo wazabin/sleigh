@@ -18,15 +18,14 @@ pub struct FieldTableId(usize);
 
 /// Identifies a field: a named bit range within a token or within the context
 /// register, or one of the global pseudo-fields such as `inst_start`.
-#[derive(Identifier)]
-pub struct FieldId(usize);
+pub use pcode_types::FieldId;
 
-pub(crate) const FIELD_INST_START: FieldId = FieldId(0);
-pub(crate) const FIELD_INST_NEXT: FieldId = FieldId(1);
+pub(crate) const FIELD_INST_START: FieldId = FieldId::new(0);
+pub(crate) const FIELD_INST_NEXT: FieldId = FieldId::new(1);
 
 /// Address after the instruction *following* this one, whose length is taken
 /// without its own delay slot. Used by skip instructions (Toy's `sk`).
-pub(crate) const FIELD_INST_NEXT2: FieldId = FieldId(2);
+pub(crate) const FIELD_INST_NEXT2: FieldId = FieldId::new(2);
 
 /// What a field's bit range is measured against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

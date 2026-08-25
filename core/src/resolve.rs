@@ -788,7 +788,8 @@ impl Resolver {
                         args: resolved_args,
                     },
                     Some(SymbolId::Special) => ExpressionTy::FunctionCall {
-                        builtin: Builtin::from_str(name).expect("Special symbol must be a builtin"),
+                        builtin: Builtin::from_name(name)
+                            .expect("Special symbol must be a builtin"),
                         args: resolved_args,
                     },
                     _ => {

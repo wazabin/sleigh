@@ -2,13 +2,9 @@ use crate::{
     constructor::{ConstructorBuilder, ConstructorId},
     pattern::{CombinedPattern, TokenPattern},
 };
-use jstd::{
-    Identifier,
-    registry::{Identified, Registry},
-};
+use jstd::registry::{Identified, Registry};
 
-#[derive(Identifier)]
-pub struct TableId(usize);
+pub(crate) use pcode_types::TableId;
 
 /// A reference to a [`Table`] with its id
 pub(crate) type TableRef<'b> = Identified<TableId, &'b Table>;

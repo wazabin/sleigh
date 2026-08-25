@@ -1,4 +1,5 @@
 use crate::tests::integration::{assert_ast_eq, decode_ast};
+use sleigh::{Decoder, Opcode, SPACE_CONST};
 
 #[test]
 fn x86_push_ebp() {
@@ -49,6 +50,23 @@ fn x86_mov_eax_imm32() {
     assert_eq!(info.length, 5);
 
     assert_ast_eq(spec, &ast, "EAX = 305419896:4;");
+}
+
+#[test]
+fn x86_mov_eax_imm32_has_raw_pcode() {
+    let spec = crate::x86::spec();
+    let instruction = Decoder::new(spec)
+        .decode_one(0x1000, b"\xb8\x78\x56\x34\x12", &spec.new_context())
+        .unwrap();
+    let pcode = instruction.pcode_ops().unwrap();
+
+    assert_eq!(pcode.ops.len(), 1);
+    assert_eq!(pcode.ops[0].opcode, Opcode::Copy);
+    assert_eq!(pcode.ops[0].inputs.len(), 1);
+    assert_eq!(pcode.ops[0].inputs[0].space, SPACE_CONST);
+    assert_eq!(pcode.ops[0].inputs[0].offset, 0x1234_5678);
+    assert_eq!(pcode.ops[0].inputs[0].size, 4);
+    assert_eq!(pcode.ops[0].output.unwrap().size, 4);
 }
 
 #[test]

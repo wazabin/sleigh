@@ -9,8 +9,8 @@ rust-version = "1.85"
 license = "MIT"
 
 [workspace.dependencies]
-jstd = { version = "0.1.0", path = "../../jstd/jstd" }
-pcode-types = { package = "wazabin-pcode", version = "0.1.0", path = "../../wazabin-pcode/pcode-types" }
+jstd = { version = "0.1.0", path = "../jstd" }
+pcode-types = { package = "wazabin-pcode", version = "0.1.0", path = "../wazabin-pcode" }
 pest = "2.8.6"
 pest_derive = "2.8.6"
 serde = { version = "1", features = ["derive"] }

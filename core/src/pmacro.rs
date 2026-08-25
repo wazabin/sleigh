@@ -7,7 +7,6 @@ use crate::{
         statement::{Ast, AstNode, DelaySlotArg, LabelOrNode},
     },
 };
-use jstd::Identifier;
 use jstd::registry::Registry;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -15,8 +14,7 @@ use std::collections::{HashMap, HashSet};
 pub(crate) mod expression;
 pub(crate) mod statement;
 
-#[derive(Identifier)]
-pub struct PMacroId(usize);
+pub(crate) use pcode_types::PMacroId;
 
 /// A compiled p-code macro definition, with per-statement byte spans for diagnostics.
 #[derive(Debug, Clone, Serialize, Deserialize)]

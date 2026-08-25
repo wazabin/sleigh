@@ -70,11 +70,14 @@ pub use compile::{CompileOptions, Compiler};
 pub use diagnostic::{CompileError, Diagnostic, DiagnosticCode, DiagnosticLabel, Severity};
 pub use objects::field::FieldId;
 pub use pcode_error::{PcodeError, PcodeErrorTy, PcodeResult};
-pub use pcode_types::{RegisterId, SpaceId};
+pub use pcode_types::{
+    BitRangeInfo, InstructionPcode, Opcode, PcodeLowerError, PcodeLoweringContext, PcodeOp,
+    RegisterId, SPACE_CONST, Space, SpaceId, SpaceType, Varnode, lower_instruction,
+};
 pub use runtime::{
-    CompiledSpec, Context, ContextBytes, ContextDatabase, ContextEffect, ContextError,
-    ContextScope, DecodeError, Decoder, DelaySlotError, FieldRef, Instruction, RegisterRef,
-    SpaceRef, SymbolKind, SymbolRef, TableRef, TokenRef,
+    CompiledSpec, ConstructorMatch, Context, ContextBytes, ContextDatabase, ContextEffect,
+    ContextError, ContextScope, DecodeError, Decoder, DelaySlotError, FieldRef, Instruction,
+    RegisterRef, SpaceRef, SymbolKind, SymbolRef, TableRef, TokenRef,
 };
 pub use semantics::{
     Builtin, EmitError, InstructionInfo, LocalVarId, PcodeAst, PcodeBinaryOp, PcodeBinop,

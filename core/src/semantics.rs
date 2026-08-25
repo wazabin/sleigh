@@ -123,43 +123,13 @@ use std::{error::Error, fmt};
 // span parameter these carry is `()` at this boundary — it holds byte ranges
 // only while the compiler is still lowering — so their defaults make the
 // `Pcode*` names spelling-compatible with the aliases they replace.
-pub use crate::pmacro::expression::{
-    BinaryOperator as PcodeBinaryOp, Binop as PcodeBinop, Builtin, Expression as PcodeExpr,
-    ExpressionTy as PcodeExprKind, Ident as PcodeIdent, Load as PcodeLoad, LocalVarId,
-    Range as PcodeRange, RangeParam, SpaceRef as PcodeSpaceRef, UnaryOperator as PcodeUnaryOp,
-    Unop as PcodeUnop,
+pub use pcode_types::{
+    Ast as PcodeStatement, AstNode as PcodeStatementKind, BinaryOperator as PcodeBinaryOp,
+    Binop as PcodeBinop, Builtin, DelaySlotArg as PcodeDelaySlot, Expression as PcodeExpr,
+    ExpressionTy as PcodeExprKind, Ident as PcodeIdent, LabelOrNode as PcodeTarget,
+    Load as PcodeLoad, LocalVarId, PcodeSpaceRef, Range as PcodeRange, RangeParam,
+    UnaryOperator as PcodeUnaryOp, Unop as PcodeUnop,
 };
-pub use crate::pmacro::statement::{
-    Ast as PcodeStatement, AstNode as PcodeStatementKind, DelaySlotArg as PcodeDelaySlot,
-    LabelOrNode as PcodeTarget,
-};
-
-impl From<PcodeStatementKind> for PcodeStatement {
-    fn from(stmt: PcodeStatementKind) -> Self {
-        PcodeStatement { ty: stmt, span: () }
-    }
-}
-
-impl PcodeExprKind {
-    /// Wraps this node in a [`PcodeExpr`] of the given width, in bytes.
-    pub fn with_size(self, size: usize) -> PcodeExpr {
-        PcodeExpr {
-            ty: self,
-            size: Some(size),
-            span: (),
-        }
-    }
-}
-
-impl From<PcodeExprKind> for PcodeExpr {
-    fn from(expr: PcodeExprKind) -> Self {
-        PcodeExpr {
-            ty: expr,
-            size: None,
-            span: (),
-        }
-    }
-}
 
 /// Summary of a decoded instruction passed with its p-code AST.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,21 +140,47 @@ pub struct InstructionInfo {
     pub length: usize,
 }
 
-/// Backend-neutral p-code AST for one decoded instruction.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PcodeAst {
-    /// Statements in execution order.
-    pub statements: Vec<PcodeStatement>,
-}
+pub use pcode_types::PcodeAst;
 
-impl PcodeAst {
-    /// Pretty-prints this p-code AST using the given spec for symbol resolution.
-    pub fn pretty_print(&self, spec: &crate::CompiledSpec) -> String {
-        self.statements
+impl pcode_types::PcodeResolver for crate::CompiledSpec {
+    fn ident_name(&self, ident: &PcodeIdent) -> String {
+        match ident {
+            PcodeIdent::Named(id) => format!("v{}", id.0),
+            PcodeIdent::Register(id) => self.spec().registers[*id].name.to_string(),
+            PcodeIdent::BitRange(id) => self.spec().bitranges[*id].name.to_string(),
+            PcodeIdent::Field(id) => self.spec().fields[*id].name.to_string(),
+            PcodeIdent::Table(id) => format!("table{}", usize::from(*id)),
+            PcodeIdent::Global(name) => format!("?{name}"),
+        }
+    }
+
+    fn field_name(&self, id: pcode_types::FieldId) -> String {
+        self.spec().fields[id].name.to_string()
+    }
+
+    fn space_name(&self, id: pcode_types::SpaceId) -> String {
+        self.spec().spaces[id]
+            .name
+            .as_deref()
+            .unwrap_or("<unnamed-space>")
+            .to_string()
+    }
+
+    fn pcode_op_name(&self, id: pcode_types::PCodeOpId) -> String {
+        self.spec().pcode_ops[id].to_string()
+    }
+
+    fn macro_name(&self, id: pcode_types::PMacroId) -> String {
+        self.spec()
+            .symbols
             .iter()
-            .map(|stmt| stmt.pretty_print(spec))
-            .collect::<Vec<_>>()
-            .join("\n")
+            .find_map(|(name, &symbol)| match symbol {
+                crate::builder::SymbolId::Macro(candidate) if candidate == id => {
+                    Some(name.to_string())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| "<unknown-macro>".to_string())
     }
 }
 

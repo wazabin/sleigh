@@ -1,7 +1,7 @@
 use crate::{
     Builtin, CompiledSpec, Compiler, ContextBytes, ContextDatabase, ContextEffect, ContextError,
-    ContextScope, DecodeError, Decoder, DelaySlotError, Instruction, RegisterId, SourceDb, SpaceId,
-    analyze,
+    ContextScope, DecodeError, Decoder, DelaySlotError, Instruction, Opcode, RegisterId, SourceDb,
+    SpaceId, SpaceType, analyze,
     semantics::{
         EmitError, InstructionInfo, PcodeAst, PcodeBinaryOp, PcodeExprKind, PcodeIdent, PcodeLoad,
         PcodeRange, PcodeSpaceRef, PcodeStatementKind, PcodeTarget, RangeParam, SemanticsSink,
@@ -548,6 +548,41 @@ fn bit_range() {
                     )
             )
     ));
+}
+
+#[test]
+fn pcode_ops_lower_expanded_ranges_into_raw_operations() {
+    let sources = Box::leak(Box::new(SourceDb::new()));
+    let root = sources.add_file("semantics.sla", SEMANTIC_EXPRESSION_FIXTURE);
+    let spec = Box::leak(Box::new(Compiler::new(sources).compile(root).unwrap()));
+    let instruction = Decoder::new(spec)
+        .decode_one(0x1000, &[0x13], &spec.new_context())
+        .unwrap();
+
+    let pcode = instruction.pcode_ops().unwrap();
+    assert_eq!(
+        pcode.ops.iter().map(|op| op.opcode).collect::<Vec<_>>(),
+        vec![
+            Opcode::IntZext,
+            Opcode::IntAnd,
+            Opcode::IntLeft,
+            Opcode::IntAnd,
+            Opcode::IntOr,
+            Opcode::IntRight,
+            Opcode::IntAnd,
+            Opcode::SubPiece,
+            Opcode::IntZext,
+        ]
+    );
+    let unique = spec.space("unique").expect("unique space must be public");
+    assert!(matches!(unique.space().ty, SpaceType::Unique));
+    assert!(
+        pcode
+            .ops
+            .iter()
+            .filter_map(|op| op.output)
+            .any(|output| output.space == unique.id)
+    );
 }
 
 #[test]

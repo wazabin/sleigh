@@ -24,13 +24,64 @@ use crate::{
 pub use context::{Context, ContextBytes, ContextError};
 pub use context_db::ContextDatabase;
 pub use effects::{ContextEffect, ContextScope};
-use pcode_types::RegisterId;
-use pcode_types::SpaceId;
+use pcode_types::{
+    BitRangeInfo, InstructionPcode, PcodeLoweringContext, RegisterId, SpaceId, Varnode,
+    lower_instruction,
+};
 pub use refs::{FieldRef, RegisterRef, SpaceRef, SymbolKind, SymbolRef, TableRef, TokenRef};
 use serde::{Deserialize, Serialize};
 use walker::Walker;
 
 pub use walker::{DecodeError, DelaySlotError};
+
+/// Supplies compiled-SLEIGH storage metadata to the generic flat p-code
+/// lowerer. Kept private so SLEIGH remains only a producer of that metadata.
+struct InstructionPcodeContext<'a> {
+    spec: &'a Spec,
+}
+
+impl<'a> InstructionPcodeContext<'a> {
+    fn new(spec: &'a Spec) -> Self {
+        Self { spec }
+    }
+}
+
+impl PcodeLoweringContext for InstructionPcodeContext<'_> {
+    fn default_space(&self) -> SpaceId {
+        self.spec.default_space
+    }
+
+    fn unique_space(&self) -> SpaceId {
+        self.spec.unique_space
+    }
+
+    fn register_varnode(&self, id: RegisterId) -> Option<Varnode> {
+        (usize::from(id) < self.spec.registers.len()).then(|| {
+            let register = &self.spec.registers[id];
+            Varnode::new(register.space, register.offset as u64, register.size)
+        })
+    }
+
+    fn bitrange_info(&self, id: BitRangeFieldId) -> Option<BitRangeInfo> {
+        if usize::from(id) >= self.spec.bitranges.len() {
+            return None;
+        }
+        let bitrange = &self.spec.bitranges[id];
+        if usize::from(bitrange.register) >= self.spec.registers.len() {
+            return None;
+        }
+        let register = &self.spec.registers[bitrange.register];
+        Some(BitRangeInfo {
+            storage: Varnode::new(register.space, register.offset as u64, register.size),
+            start: bitrange.offset(),
+            size: bitrange.size(),
+        })
+    }
+
+    fn address_size(&self, space: SpaceId) -> Option<usize> {
+        (usize::from(space) < self.spec.spaces.len()).then(|| self.spec.spaces[space].addr_size)
+    }
+}
 
 /// A compiled SLEIGH specification.
 #[derive(Serialize, Deserialize)]
@@ -350,6 +401,36 @@ impl<'spec> Decoder<'spec> {
     }
 }
 
+/// A constructor selected while decoding an [`Instruction`].
+///
+/// SLEIGH instruction patterns recursively enter operand tables, so one encoded
+/// instruction usually selects more than its top-level constructor. This value
+/// identifies one entry in that complete selected-constructor path.
+pub struct ConstructorMatch<'spec> {
+    table: TableRef<'spec>,
+    index: usize,
+}
+
+impl<'spec> ConstructorMatch<'spec> {
+    fn from_instance(spec: &'spec CompiledSpec, instance: &ConstructorInstance) -> Self {
+        let table_id = TableId::from(usize::from(instance.tree));
+        Self {
+            table: TableRef::new(table_id, &spec.spec.trees[instance.tree]),
+            index: instance.id.into(),
+        }
+    }
+
+    /// Table containing the selected constructor.
+    pub fn table(&self) -> &TableRef<'spec> {
+        &self.table
+    }
+
+    /// Zero-based index of the selected constructor within [`table`](Self::table).
+    pub fn index(&self) -> usize {
+        self.index
+    }
+}
+
 /// Decoded instruction plus access to its compiled specification.
 #[derive(Clone)]
 pub struct Instruction<'spec, 'bytes> {
@@ -441,6 +522,34 @@ impl<'spec, 'bytes> Instruction<'spec, 'bytes> {
         self.instance.operand_values.len()
     }
 
+    /// Iterates over every constructor selected while decoding this instruction.
+    ///
+    /// The root instruction constructor is first, followed recursively by
+    /// constructors selected from operand tables. Constructors of decoded delay
+    /// slots are included after the root instruction's operand path.
+    pub fn constructor_matches(&self) -> impl Iterator<Item = ConstructorMatch<'spec>> + '_ {
+        fn collect<'a>(
+            instance: &'a ConstructorInstance,
+            matches: &mut Vec<&'a ConstructorInstance>,
+        ) {
+            matches.push(instance);
+            for operand in &instance.operand_values {
+                if let crate::instance::OperandValue::Constructor(child) = operand {
+                    collect(child, matches);
+                }
+            }
+            for delay_slot in &instance.delay_slots {
+                collect(delay_slot, matches);
+            }
+        }
+
+        let mut matches = Vec::new();
+        collect(&self.instance, &mut matches);
+        matches
+            .into_iter()
+            .map(move |instance| ConstructorMatch::from_instance(self.spec, instance))
+    }
+
     /// Context changes this instruction's disassembly actions request.
     ///
     /// Empty for the vast majority of instructions. Decoding is pure, so a
@@ -494,6 +603,22 @@ impl<'spec, 'bytes> Instruction<'spec, 'bytes> {
     /// ```
     pub fn pcode_ast(&self) -> Result<PcodeAst, EmitError> {
         pcode_ast_for_instance(&self.spec.spec, &self.instance)
+    }
+
+    /// Returns raw Ghidra-style flat p-code operations for this instruction.
+    ///
+    /// This lowers the fully expanded [`PcodeAst`] returned by
+    /// [`pcode_ast`](Self::pcode_ast), allocating instruction-local temporaries
+    /// in the compiled specification's real unique space.
+    pub fn pcode_ops(&self) -> Result<InstructionPcode, EmitError> {
+        let ast = self.pcode_ast()?;
+        lower_instruction(&ast, &InstructionPcodeContext::new(&self.spec.spec))
+            .map_err(|error| EmitError::new(error.to_string()))
+    }
+
+    /// Alias for [`pcode_ops`](Self::pcode_ops).
+    pub fn instruction_pcode(&self) -> Result<InstructionPcode, EmitError> {
+        self.pcode_ops()
     }
 
     /// Emits backend-neutral semantics into `sink`.

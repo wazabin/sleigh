@@ -41,6 +41,9 @@ use std::collections::HashMap;
 pub(crate) struct Spec {
     pub(crate) default_space: SpaceId,
 
+    /// The real, spec-owned space used for raw p-code temporaries.
+    pub(crate) unique_space: SpaceId,
+
     pub(crate) context_reg: Option<RegisterId>,
 
     /// Tables to attach values to fields
@@ -137,17 +140,24 @@ impl Spec {
         let default_space = builder
             .default_space
             .unwrap_or_else(|| spaces.push(Space::new(None, 8, 8)));
+        // Append this only after resolving all source spaces: their stable IDs
+        // are part of compiled-spec blobs and must not be renumbered.
+        let unique_space = spaces.push(Space::unique(spaces[default_space].addr_size));
+
+        let mut symbols = builder.symbols;
+        symbols.insert(Box::from("unique"), SymbolId::Space(unique_space));
 
         let mut spec = Self {
             trees,
             spaces,
             default_space,
+            unique_space,
             fields: builder.fields,
             registers: builder.registers,
             bitranges: builder.bitranges,
             field_tables: builder.field_tables,
             context_reg: builder.context_reg,
-            symbols: builder.symbols,
+            symbols,
             pcode_ops: builder.pcode_ops,
             pmacros: builder.pmacros,
 

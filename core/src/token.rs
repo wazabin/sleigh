@@ -89,8 +89,7 @@ impl Token {
 /// declaration, which names a run of bits inside a register (for instance a
 /// single flag within a status register) so that semantics can read and write
 /// it by name.
-#[derive(Identifier)]
-pub struct BitRangeFieldId(usize);
+pub use pcode_types::BitRangeFieldId;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct BitRangeField {
