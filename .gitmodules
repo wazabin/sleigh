@@ -1,0 +1,3 @@
+[submodule "precompile/open_sleigh"]
+	path = precompile/open_sleigh
+	url = git@github.com:Garfield1002/open_sleigh.git
