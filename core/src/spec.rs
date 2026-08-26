@@ -25,7 +25,7 @@ use std::collections::HashMap;
 ///
 /// # Usage
 ///
-/// ```ignore
+/// ```no_run
 /// use sleigh::{Compiler, Decoder, SourceDb};
 ///
 /// let text = std::fs::read_to_string("x86-64.slaspec").unwrap();
@@ -35,7 +35,7 @@ use std::collections::HashMap;
 /// let context = spec.new_context();
 /// let decoder = Decoder::new(&spec);
 /// let instruction = decoder.decode_one(0, &[0x90], &context).unwrap();
-/// println!("{}", instruction.display());
+/// println!("{}", instruction.display().unwrap());
 /// ```
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Spec {
