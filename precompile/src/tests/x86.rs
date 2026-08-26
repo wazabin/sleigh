@@ -185,6 +185,7 @@ fn x86_xor_al_imm8() {
         &ast,
         r#"CF = 0;
             OF = 0;
+            AF = undef();
             AL = (AL ^ 18:1);
             SF = (AL s< 0);
             ZF = (AL == 0);
@@ -240,7 +241,11 @@ fn x86_imul_esi_edi() {
                 ESI = subpiece_msb({v1}, 0);
                 {v2}:4 = subpiece_msb({v1}, 4);
                 CF = (sext(ESI) != {v1});
-                OF = CF;",
+                OF = CF;
+                AF = undef();
+                PF = undef();
+                SF = undef();
+                ZF = undef();",
         ),
     );
 }

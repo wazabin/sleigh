@@ -35,6 +35,7 @@ fn x64_xor_al_imm8() {
         &ast,
         r#"CF = 0;
             OF = 0;
+            AF = undef();
             AL = (AL ^ 18:1);
             SF = (AL s< 0);
             ZF = (AL == 0);
@@ -209,7 +210,11 @@ fn x64_imul_rsi_rdi() {
                 RSI = (RSI * RDI);
                 {v1}:8 = subpiece_msb({v0}, 8);
                 CF = (sext(RSI) != {v0});
-                OF = CF;"
+                OF = CF;
+                AF = undef();
+                PF = undef();
+                SF = undef();
+                ZF = undef();"
         ),
     );
 }
@@ -228,6 +233,7 @@ fn x64_xor_r8_r8() {
         &ast,
         r#"CF = 0;
             OF = 0;
+            AF = undef();
             R8 = (R8 ^ R8);
             SF = (R8 s< 0);
             ZF = (R8 == 0);
@@ -315,15 +321,21 @@ fn x64_shl_rax_imm() {
             v6 = ((v1 << (v0 - 1)) s< 0);
             CF = ((!v5 && CF) || (v5 && v6));
             v7 = (v0 == 1);
-            v8 = (CF ^^ (RAX s< 0));
-            OF = ((!v7 && OF) || (v7 && v8));
-            v11 = (v0 != 0);
-            v12 = (RAX s< 0);
-            SF = ((!v11 && SF) || (v11 && v12));
-            v13 = (RAX == 0);
-            ZF = ((!v11 && ZF) || (v11 && v13));
-            v14 = ((popcount((RAX & 255)) & 1:1) == 0);
-            PF = ((!v11 && PF) || (v11 && v14));"#,
+            v8 = ((v0 != 0) && !v7);
+            v9 = (CF ^^ (RAX s< 0));
+            v10 = OF;
+            OF = undef();
+            OF = ((((!v7 && !v8) && v10) || (v7 && v9)) || (v8 && OF));
+            v13 = (v0 != 0);
+            v14 = (RAX s< 0);
+            SF = ((!v13 && SF) || (v13 && v14));
+            v15 = (RAX == 0);
+            ZF = ((!v13 && ZF) || (v13 && v15));
+            v16 = ((popcount((RAX & 255)) & 1:1) == 0);
+            PF = ((!v13 && PF) || (v13 && v16));
+            v17 = AF;
+            AF = undef();
+            AF = ((!v13 && v17) || (v13 && AF));"#,
     );
 }
 
@@ -346,14 +358,20 @@ fn x64_sar_rcx_cl() {
             v6 = (((v1 s>> (v0 - 1)) & 1) != 0);
             CF = ((!v5 && CF) || (v5 && v6));
             v7 = (v0 == 1);
-            OF = (!v7 && OF);
-            v10 = (v0 != 0);
-            v11 = (RCX s< 0);
-            SF = ((!v10 && SF) || (v10 && v11));
-            v12 = (RCX == 0);
-            ZF = ((!v10 && ZF) || (v10 && v12));
-            v13 = ((popcount((RCX & 255)) & 1:1) == 0);
-            PF = ((!v10 && PF) || (v10 && v13));"#,
+            v8 = ((v0 != 0) && !v7);
+            v9 = OF;
+            OF = undef();
+            OF = ((((!v7 && !v8) && v9) || (v7 && 0)) || (v8 && OF));
+            v12 = (v0 != 0);
+            v13 = (RCX s< 0);
+            SF = ((!v12 && SF) || (v12 && v13));
+            v14 = (RCX == 0);
+            ZF = ((!v12 && ZF) || (v12 && v14));
+            v15 = ((popcount((RCX & 255)) & 1:1) == 0);
+            PF = ((!v12 && PF) || (v12 && v15));
+            v16 = AF;
+            AF = undef();
+            AF = ((!v12 && v16) || (v12 && AF));"#,
     );
 }
 
@@ -371,6 +389,7 @@ fn x64_rol_rdx_one() {
         &ast,
         r#"CF = (RDX s< 0);
             RDX = ((RDX << 1) | zext(CF));
+            OF = undef();
             OF = (CF ^ (RDX s< 0));"#,
     );
 }
@@ -932,7 +951,11 @@ fn x64_imul_ax_cx() {
                 AX = subpiece_msb({tmp}, 0);
                 {high}:2 = subpiece_msb({tmp}, 2);
                 CF = (sext(AX) != {tmp});
-                OF = CF;"
+                OF = CF;
+                AF = undef();
+                PF = undef();
+                SF = undef();
+                ZF = undef();"
         ),
     );
 }
@@ -1243,7 +1266,11 @@ fn x64_imul_mem() {
                 RAX = (RAX * load(space=ram, size=8, ptr={addr}));
                 {high}:8 = subpiece_msb({wide}, 8);
                 CF = (sext(RAX) != {wide});
-                OF = CF;"
+                OF = CF;
+                AF = undef();
+                PF = undef();
+                SF = undef();
+                ZF = undef();"
         ),
     );
 }
