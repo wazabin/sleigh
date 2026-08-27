@@ -28,6 +28,14 @@
 
 pub mod bitrange;
 pub mod compile;
+/// Read-only views over the compiled specification's *symbolic* structures.
+///
+/// **Unstable.** Behind the `unstable-introspect` feature and exempt from this
+/// crate's semantic versioning, for the same reason [`syntax`] is: these are
+/// the compiler's own representations. `wazabin-metal` is the intended
+/// consumer.
+#[cfg(feature = "unstable-introspect")]
+pub mod introspect;
 pub mod diagnostic;
 pub mod pcode_error;
 pub mod runtime;

@@ -67,6 +67,18 @@ pub(crate) struct CompiledCombinedPattern {
 }
 
 impl CompiledCombinedPattern {
+    /// The compiled context-register half of this pattern.
+    #[cfg(feature = "unstable-introspect")]
+    pub(crate) fn context_block(&self) -> &CompiledPatternBlock {
+        &self.context
+    }
+
+    /// The compiled instruction-stream half of this pattern.
+    #[cfg(feature = "unstable-introspect")]
+    pub(crate) fn instruction_block(&self) -> &CompiledPatternBlock {
+        &self.instruction
+    }
+
     pub(crate) fn matches(&self, bytes: &[u8], context: &[u8]) -> bool {
         self.instruction.matches(bytes) && self.context.matches(context)
     }

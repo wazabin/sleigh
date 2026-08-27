@@ -209,6 +209,12 @@ impl Field {
         })
     }
 
+    /// How this field's raw bits are to be interpreted.
+    #[cfg(feature = "unstable-introspect")]
+    pub(crate) fn field_type(&self) -> FieldType {
+        self.ty
+    }
+
     /// Adds a table to this field
     pub(crate) fn attach(&mut self, ty: FieldType) {
         self.ty = ty;
@@ -241,6 +247,24 @@ pub(crate) struct FieldTables {
 }
 
 impl FieldTables {
+    /// The `attach variables` table `id` names.
+    #[cfg(feature = "unstable-introspect")]
+    pub(crate) fn register_table(&self, id: FieldTableId) -> &[Option<RegisterId>] {
+        &self.registers[id]
+    }
+
+    /// The `attach names` table `id` names.
+    #[cfg(feature = "unstable-introspect")]
+    pub(crate) fn name_table(&self, id: FieldTableId) -> &[Option<Box<str>>] {
+        &self.names[id]
+    }
+
+    /// The `attach values` table `id` names.
+    #[cfg(feature = "unstable-introspect")]
+    pub(crate) fn value_table(&self, id: FieldTableId) -> &[Option<u64>] {
+        &self.values[id]
+    }
+
     /// Registers an `attach variables` table, indexed by field value.
     ///
     /// A `_` entry in the attach list is stored as `None`, meaning that value

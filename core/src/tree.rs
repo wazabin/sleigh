@@ -159,7 +159,7 @@ fn choose_optimal_range(max_len: usize, patterns: &[ConstructorPair]) -> Option<
 pub(crate) struct TreeNodeId(usize);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-enum TreeNode {
+pub(crate) enum TreeNode {
     Node {
         range: CombinedRange,
         children: Box<[Option<TreeNodeId>]>,
@@ -388,6 +388,24 @@ impl Tree {
 
     fn root(&self) -> &TreeNode {
         &self.nodes[self.root]
+    }
+
+    /// Id of this tree's root decision node.
+    #[cfg(feature = "unstable-introspect")]
+    pub(crate) fn root_id(&self) -> TreeNodeId {
+        self.root
+    }
+
+    /// The decision node `id` names.
+    #[cfg(feature = "unstable-introspect")]
+    pub(crate) fn node(&self, id: TreeNodeId) -> &TreeNode {
+        &self.nodes[id]
+    }
+
+    /// Every decision node, in id order.
+    #[cfg(feature = "unstable-introspect")]
+    pub(crate) fn node_ids(&self) -> impl Iterator<Item = TreeNodeId> + '_ {
+        (0..self.nodes.len()).map(TreeNodeId::from)
     }
 
     pub(crate) fn get_constructor(

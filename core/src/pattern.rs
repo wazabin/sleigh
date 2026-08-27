@@ -5,6 +5,8 @@ mod block;
 mod combined;
 mod token;
 
+#[cfg(feature = "unstable-introspect")]
+pub(crate) use block::CompiledPatternBlock;
 pub(crate) use block::PatternBlock;
 pub(crate) use combined::CompiledCombinedPattern;
 pub(crate) use combined::{CombinedPattern, CombinedRange};

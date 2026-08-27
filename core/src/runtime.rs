@@ -107,6 +107,13 @@ impl CompiledSpec {
         self.context_len as usize
     }
 
+    /// The internal compiled specification, for in-crate consumers such as
+    /// [`crate::introspect`].
+    #[cfg(feature = "unstable-introspect")]
+    pub(crate) fn inner(&self) -> &Spec {
+        &self.spec
+    }
+
     /// Creates a zero-initialized processor context for this specification.
     pub fn new_context(&self) -> ContextBytes {
         self.context_bytes.clone()
