@@ -41,6 +41,7 @@
 //! ```
 
 use crate::{
+    action::{Action, Atom, Expr},
     bitrange::BitRange,
     builder::Endian as InternalEndian,
     constructor::{Constructor, ConstructorId, DisplayElement},
@@ -48,6 +49,7 @@ use crate::{
         field::{Field, FieldId, FieldParent as InternalFieldParent, FieldType},
         table::TableId,
     },
+    action::{BinOp, GlobalSetAddr, UnOp},
     pattern::{CompiledPatternBlock, OperandType},
     pmacro::{PCodeMacro, PMacroId},
     runtime::CompiledSpec,
@@ -565,6 +567,33 @@ impl<'spec> ConstructorView<'spec> {
         &self.constructor.pmacro.non_build_table_refs
     }
 
+    /// This constructor's disassembly actions, in source order.
+    ///
+    /// These run at *decode* time, not execution time: they compute the
+    /// values of the constructor's global pseudo-fields, which the body then
+    /// reads like any other field. A PC-relative branch target is the usual
+    /// case — `reloc = inst_next + 2 * simm8;` — so a generated decoder that
+    /// skips them cannot resolve a branch destination.
+    pub fn actions(&self) -> Vec<DisassemblyAction> {
+        self.constructor
+            .actions
+            .iter()
+            .map(|action| match action {
+                Action::Assign { field_id, expr } => DisassemblyAction::Assign {
+                    field: *field_id,
+                    value: ActionExpr::from(expr),
+                },
+                Action::GlobalSet { addr, field_id } => DisassemblyAction::GlobalSet {
+                    address: match addr {
+                        GlobalSetAddr::Expr(expr) => GlobalSetTarget::Expr(ActionExpr::from(expr)),
+                        GlobalSetAddr::Table(id) => GlobalSetTarget::Operand(*id),
+                    },
+                    field: *field_id,
+                },
+            })
+            .collect()
+    }
+
     /// The `delayslot` directive in this constructor's body, if it has one.
     pub fn delay_slot(&self) -> Option<&'spec DelaySlotArg> {
         self.constructor.delay_slot.as_ref()
@@ -731,5 +760,138 @@ impl<'spec> FieldView<'spec> {
         let endian = self.spec.token_endian(token);
         let within_token = self.field.range.start() + field_bit;
         Some(operand_bit_offset + token_stream_bit(token_bits, endian, within_token))
+    }
+}
+
+/// One statement of a constructor's disassembly-action block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DisassemblyAction {
+    /// `field = value;` — computes a global pseudo-field for this decode.
+    Assign {
+        /// The field written.
+        field: FieldId,
+        /// What it is set to.
+        value: ActionExpr,
+    },
+
+    /// `globalset(address, field);` — commits `field`'s current value into the
+    /// context database, so it applies to later decodes.
+    GlobalSet {
+        /// Where the committed value takes effect.
+        address: GlobalSetTarget,
+        /// The context field whose value is committed.
+        field: FieldId,
+    },
+}
+
+/// Where a `globalset` commits its value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GlobalSetTarget {
+    /// An expression over this decode's fields, overwhelmingly `inst_next`.
+    Expr(ActionExpr),
+    /// A sub-table operand, whose exported address is the target.
+    Operand(TableId),
+}
+
+/// An infix operator in a disassembly-action expression.
+///
+/// Actions compute over whole field values at decode time, so there is one
+/// arithmetic per operator: no width, and no signedness to pick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActionBinOp {
+    /// Bitwise or.
+    Or,
+    /// Bitwise exclusive-or.
+    Xor,
+    /// Bitwise and.
+    And,
+    /// Left shift. A distance that is negative or at least 64 fails the decode.
+    Shl,
+    /// Right shift, with the same restriction on the distance.
+    Shr,
+    /// Wrapping addition.
+    Add,
+    /// Wrapping subtraction.
+    Sub,
+    /// Wrapping multiplication.
+    Mul,
+    /// Signed division. A zero divisor fails the decode.
+    Div,
+}
+
+impl From<BinOp> for ActionBinOp {
+    fn from(value: BinOp) -> Self {
+        match value {
+            BinOp::Or => Self::Or,
+            BinOp::Xor => Self::Xor,
+            BinOp::And => Self::And,
+            BinOp::Shl => Self::Shl,
+            BinOp::Shr => Self::Shr,
+            BinOp::Add => Self::Add,
+            BinOp::Sub => Self::Sub,
+            BinOp::Mul => Self::Mul,
+            BinOp::Div => Self::Div,
+        }
+    }
+}
+
+/// A prefix operator in a disassembly-action expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActionUnOp {
+    /// Wrapping negation.
+    Neg,
+    /// Bitwise complement.
+    Not,
+}
+
+impl From<UnOp> for ActionUnOp {
+    fn from(value: UnOp) -> Self {
+        match value {
+            UnOp::Neg => Self::Neg,
+            UnOp::Not => Self::Not,
+        }
+    }
+}
+
+/// An expression evaluated at decode time over 64-bit field values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionExpr {
+    /// A literal.
+    Int(i64),
+    /// The decoded value of a field, or of a pseudo-field such as `inst_next`.
+    Field(FieldId),
+    /// An infix operation.
+    Binary {
+        /// Which operator.
+        op: ActionBinOp,
+        /// Left operand.
+        lhs: Box<ActionExpr>,
+        /// Right operand.
+        rhs: Box<ActionExpr>,
+    },
+    /// A prefix operation.
+    Unary {
+        /// Which operator.
+        op: ActionUnOp,
+        /// The operand.
+        operand: Box<ActionExpr>,
+    },
+}
+
+impl From<&Expr> for ActionExpr {
+    fn from(value: &Expr) -> Self {
+        match value {
+            Expr::Atom(Atom::Int(value)) => Self::Int(*value),
+            Expr::Atom(Atom::Ident(id)) => Self::Field(*id),
+            Expr::Binary { op, lhs, rhs } => Self::Binary {
+                op: (*op).into(),
+                lhs: Box::new(Self::from(&**lhs)),
+                rhs: Box::new(Self::from(&**rhs)),
+            },
+            Expr::Unary { op, expr } => Self::Unary {
+                op: (*op).into(),
+                operand: Box::new(Self::from(&**expr)),
+            },
+        }
     }
 }
