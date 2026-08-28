@@ -53,6 +53,7 @@ use crate::{
     pattern::{CompiledPatternBlock, OperandType},
     pmacro::{PCodeMacro, PMacroId},
     runtime::CompiledSpec,
+    source::FileId,
     spec::Spec,
     token::TokenId,
     tree::{Tree, TreeId, TreeNode, TreeNodeId},
@@ -457,11 +458,15 @@ impl<'spec> ConstructorView<'spec> {
         self.constructor.min_size()
     }
 
-    /// Byte span of this constructor's definition in the preprocessed source,
-    /// for diagnostics that point back at the specification.
-    pub fn source_span(&self) -> (usize, usize) {
-        let (start, end) = self.constructor.src;
-        (start as usize, end as usize)
+    /// Which file this constructor was written in, and the byte range it
+    /// occupies there, for diagnostics that point back at the specification.
+    pub fn source_span(&self) -> (FileId, usize, usize) {
+        let src = self.constructor.src;
+        (
+            FileId::from_index(src.file as usize),
+            src.start as usize,
+            src.end as usize,
+        )
     }
 
     /// The alternatives of this constructor's `is` pattern. It matches when

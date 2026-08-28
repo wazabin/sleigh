@@ -26,6 +26,10 @@ impl FileId {
     pub(crate) fn index(self) -> usize {
         self.0
     }
+
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(index)
+    }
 }
 
 /// Zero-based byte offset within a source file.

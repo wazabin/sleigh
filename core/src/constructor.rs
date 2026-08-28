@@ -79,11 +79,25 @@ pub(crate) struct ConstructorBuilder {
     pub(crate) pmacro: PCodeMacro,
 }
 
+/// Where a constructor was written, narrowed to the serialized form's
+/// fixed-width integers.
+///
+/// These are offsets into the *physical* file, not into the preprocessed
+/// buffer, so the [`FileId`](crate::FileId) has to travel with them — several
+/// specification files are larger than the offsets of constructors in others,
+/// and without the file the two are indistinguishable.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct ConstructorSrc {
+    pub(crate) file: crate::Size,
+    pub(crate) start: crate::Size,
+    pub(crate) end: crate::Size,
+}
+
 /// A compiled constructor definition, used at decode time by the Walker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Constructor {
     min_size: crate::Size,
-    pub(crate) src: (crate::Size, crate::Size),
+    pub(crate) src: ConstructorSrc,
     pub(crate) token_pattern: TokenPattern,
     pub(crate) runtime_patterns: Vec<CompiledCombinedPattern>,
     pub(crate) display: Vec<DisplayElement>,
@@ -177,10 +191,11 @@ impl Constructor {
             .collect();
 
         Self {
-            src: (
-                builder.src.start.0 as crate::Size,
-                builder.src.end.0 as crate::Size,
-            ),
+            src: ConstructorSrc {
+                file: builder.src.file.index() as crate::Size,
+                start: builder.src.start.0 as crate::Size,
+                end: builder.src.end.0 as crate::Size,
+            },
             delay_slot: builder.pmacro.delay_slot().cloned(),
             uses_inst_next2: builder
                 .pmacro
