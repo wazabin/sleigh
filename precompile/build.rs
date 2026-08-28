@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use sleigh::{CompileOptions, CompiledSpec, Compiler, ContextBytes, SourceDb};
+use sleigh::{Annotations, CompileOptions, CompiledSpec, Compiler, ContextBytes, SourceDb, annotate};
 
 #[derive(serde::Deserialize)]
 struct Arch {
@@ -53,6 +53,10 @@ fn compile_arch(name: &str, arch: &Arch) {
         .compile(root)
         .unwrap_or_else(|error| panic!("Error compiling {name}: {error}"));
 
+    // Resolve the `#@family` markers here rather than at run time: the
+    // serialized specification travels without its source text.
+    let families = annotate::annotate(&compiled, &sources, "family");
+
     // Create the initial context
     if let Some(context_fields) = &arch.context {
         let mut context_bytes = compiled.new_context();
@@ -74,6 +78,14 @@ fn compile_arch(name: &str, arch: &Arch) {
         "cargo:rustc-env={}_COMPILED_SPEC={}",
         name.to_uppercase(),
         bin_path.to_str().unwrap()
+    );
+
+    let families_path = out_dir.join(format!("families/{name}_families.rs"));
+    write_file(&families_path, generate_families(&families).as_bytes());
+    println!(
+        "cargo:rustc-env={}_FAMILIES={}",
+        name.to_uppercase(),
+        families_path.to_str().unwrap()
     );
 
     let regs_path = out_dir.join(format!("regs/{name}_regs.rs"));
@@ -108,4 +120,25 @@ fn generate_regs(spec: &sleigh::CompiledSpec) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Emits the `#@family` annotations as a sorted `(table, index, family)` table.
+///
+/// Sorting keeps the generated file stable across builds — `Annotations`
+/// iterates a hash map — so an unchanged specification does not churn it.
+fn generate_families(families: &Annotations) -> String {
+    let mut entries: Vec<_> = families.iter().collect();
+    entries.sort_unstable();
+
+    let rows = entries
+        .iter()
+        .map(|(table, index, family)| format!("    ({table:?}, {index}, {family:?}),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "/// Every annotated constructor, as `(table, index, family)`, sorted.\n\
+         pub(super) static FAMILIES: [(&str, usize, &str); {}] = [\n{rows}\n];",
+        entries.len()
+    )
 }

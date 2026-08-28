@@ -30,6 +30,47 @@
 use sleigh::CompiledSpec;
 use std::sync::OnceLock;
 
+/// The instruction family each constructor belongs to.
+///
+/// A specification records this in `#@family` comments — see
+/// [`sleigh::annotate`] — and the build script reads them, so this is a lookup
+/// table rather than a computation. A specification that carries no markers
+/// yields an empty set; only the x86 ones are annotated today.
+#[derive(Debug, Clone, Copy)]
+pub struct Families {
+    /// Sorted by `(table, index)`, so lookup can binary-search.
+    entries: &'static [(&'static str, usize, &'static str)],
+}
+
+impl Families {
+    /// The family of one constructor, or `None` if it is unannotated.
+    ///
+    /// `table` and `index` are what the decoder reports for each
+    /// [`ConstructorMatch`](sleigh::ConstructorMatch), so a consumer that
+    /// records which constructors it reached can look each one up directly.
+    pub fn get(&self, table: &str, index: usize) -> Option<&'static str> {
+        self.entries
+            .binary_search_by(|(name, idx, _)| (*name, *idx).cmp(&(table, index)))
+            .ok()
+            .map(|found| self.entries[found].2)
+    }
+
+    /// Every annotated constructor, as `(table, index, family)`, sorted.
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, usize, &'static str)> {
+        self.entries.iter().copied()
+    }
+
+    /// How many constructors carry a family.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether this specification carries no family markers at all.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -55,6 +96,17 @@ pub mod x64 {
         use sleigh::RegisterId;
         include!(env!("X64_REGS"));
     }
+
+    mod family_table {
+        include!(env!("X64_FAMILIES"));
+    }
+
+    /// The `#@family` annotations on this specification's constructors.
+    pub fn families() -> Families {
+        Families {
+            entries: &family_table::FAMILIES,
+        }
+    }
 }
 
 /// 32-bit x86.
@@ -78,6 +130,17 @@ pub mod x86 {
     pub mod regs {
         use sleigh::RegisterId;
         include!(env!("X86_REGS"));
+    }
+
+    mod family_table {
+        include!(env!("X86_FAMILIES"));
+    }
+
+    /// The `#@family` annotations on this specification's constructors.
+    pub fn families() -> Families {
+        Families {
+            entries: &family_table::FAMILIES,
+        }
     }
 }
 
@@ -103,6 +166,17 @@ pub mod riscv {
         use sleigh::RegisterId;
         include!(env!("RISCV_REGS"));
     }
+
+    mod family_table {
+        include!(env!("RISCV_FAMILIES"));
+    }
+
+    /// The `#@family` annotations on this specification's constructors.
+    pub fn families() -> Families {
+        Families {
+            entries: &family_table::FAMILIES,
+        }
+    }
 }
 
 /// AArch64.
@@ -126,5 +200,16 @@ pub mod aarch64 {
     pub mod regs {
         use sleigh::RegisterId;
         include!(env!("AARCH64_REGS"));
+    }
+
+    mod family_table {
+        include!(env!("AARCH64_FAMILIES"));
+    }
+
+    /// The `#@family` annotations on this specification's constructors.
+    pub fn families() -> Families {
+        Families {
+            entries: &family_table::FAMILIES,
+        }
     }
 }

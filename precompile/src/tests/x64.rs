@@ -1461,3 +1461,41 @@ fn x64_imul_imm8_sib_disp8_opsize16() {
     assert_eq!(display, "IMUL AX,word ptr [RSP + 16],40");
     assert_eq!(info.length, 6);
 }
+
+/// The families of every constructor a decode reaches.
+///
+/// A prefixed instruction roots at a prefix-dispatch constructor and reaches
+/// the instruction proper through a sub-table, so the instruction's own family
+/// is one of several here, not the first.
+fn families_of(bytes: &[u8]) -> Vec<&'static str> {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let instruction = sleigh::Decoder::new(spec)
+        .decode_one(0x1000, bytes, &context)
+        .expect("test encoding decodes");
+    instruction
+        .constructor_matches()
+        .filter_map(|matched| crate::x64::families().get(matched.table().name(), matched.index()))
+        .collect()
+}
+
+/// Checks that `#@family` markers in the specification survive compilation and
+/// land on the constructors they were written above.
+#[test]
+fn x64_constructors_carry_their_instruction_family() {
+    for (bytes, family) in [
+        (b"\x90".as_slice(), "base"),                 // NOP
+        (b"\xd8\xc1".as_slice(), "x87"),               // FADD ST0,ST1
+        (b"\x0f\xfc\xc1".as_slice(), "mmx"),           // PADDB MM0,MM1
+        (b"\x66\x0f\xfc\xc1".as_slice(), "sse"),       // PADDB XMM0,XMM1
+        (b"\xc5\xf8\x58\xc1".as_slice(), "avx"),       // VADDPS XMM0,XMM0,XMM1
+        (b"\xf3\x0f\xbc\xc1".as_slice(), "bmi"),       // TZCNT EAX,ECX
+        (b"\x66\x0f\x38\xdb\xc1".as_slice(), "crypto"),    // AESIMC XMM0,XMM1
+    ] {
+        let found = families_of(bytes);
+        assert!(
+            found.contains(&family),
+            "{bytes:02x?} should reach a {family} constructor, reached {found:?}",
+        );
+    }
+}
