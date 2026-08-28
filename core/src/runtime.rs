@@ -108,8 +108,7 @@ impl CompiledSpec {
     }
 
     /// The internal compiled specification, for in-crate consumers such as
-    /// [`crate::introspect`].
-    #[cfg(feature = "unstable-introspect")]
+    /// [`crate::introspect`] and [`crate::annotate`].
     pub(crate) fn inner(&self) -> &Spec {
         &self.spec
     }

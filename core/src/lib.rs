@@ -26,6 +26,10 @@
 //! ```
 //!
 
+/// Section annotations read from `#@key value` comments in specification
+/// source, for tooling that wants to group constructors the language itself
+/// has no way to group.
+pub mod annotate;
 pub mod bitrange;
 pub mod compile;
 /// Read-only views over the compiled specification's *symbolic* structures.
@@ -73,6 +77,7 @@ mod tree;
 /// 32-bit targets such as wasm32 (where `usize` is only 4 bytes).
 pub type Size = u32;
 
+pub use annotate::Annotations;
 pub use bitrange::BitRange;
 pub use compile::{CompileOptions, Compiler};
 pub use diagnostic::{CompileError, Diagnostic, DiagnosticCode, DiagnosticLabel, Severity};
