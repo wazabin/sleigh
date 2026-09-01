@@ -1,5 +1,24 @@
 use std::collections::HashMap;
 
+/// Subtable exports are uncommon in the x86 semantics. Keep this map absent
+/// until a `build` or a pre-emitted subtable actually produces one.
+#[derive(Default)]
+struct BuildExports(Option<HashMap<TableId, RuntimeValue>>);
+
+impl BuildExports {
+    fn contains_key(&self, table: &TableId) -> bool {
+        self.0.as_ref().is_some_and(|exports| exports.contains_key(table))
+    }
+
+    fn get(&self, table: &TableId) -> Option<&RuntimeValue> {
+        self.0.as_ref().and_then(|exports| exports.get(table))
+    }
+
+    fn insert(&mut self, table: TableId, value: RuntimeValue) {
+        self.0.get_or_insert_default().insert(table, value);
+    }
+}
+
 use crate::{
     builder::SymbolId,
     instance::ConstructorInstance,
@@ -147,7 +166,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         id: PMacroId,
         args: &[Expression],
         outer_env: &HashMap<LocalVarId, RuntimeValue>,
-        build_exports: &mut HashMap<TableId, RuntimeValue>,
+        build_exports: &mut BuildExports,
     ) -> Result<Option<RuntimeValue>, EmitError> {
         if self.macro_stack.contains(&id) {
             return Err(EmitError::new("recursive p-code macro expansion"));
@@ -190,7 +209,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         non_build_table_refs: &[TableId],
         env: &HashMap<LocalVarId, RuntimeValue>,
     ) -> Result<Option<RuntimeValue>, EmitError> {
-        let mut build_exports = HashMap::new();
+        let mut build_exports = BuildExports::default();
 
         // Pre-emit all non-`build` subtable references.
         for &table_id in non_build_table_refs {
@@ -215,7 +234,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         instance: &ConstructorInstance,
         expr: &Expression,
         env: &HashMap<LocalVarId, RuntimeValue>,
-        build_exports: &mut HashMap<TableId, RuntimeValue>,
+        build_exports: &mut BuildExports,
     ) -> Result<RuntimeValue, EmitError> {
         if let ExpressionTy::Load(load) = &expr.ty {
             let ptr = self.expand_expr(instance, &load.ptr, env, build_exports)?;
@@ -241,7 +260,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         instance: &ConstructorInstance,
         stmt: &Ast,
         env: &HashMap<LocalVarId, RuntimeValue>,
-        build_exports: &mut HashMap<TableId, RuntimeValue>,
+        build_exports: &mut BuildExports,
     ) -> Result<(), EmitError> {
         let ty = match &stmt.ty {
             AstNode::Assignment { lhs, size, rhs } => {
@@ -346,12 +365,12 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         Ok(())
     }
 
-    pub(crate) fn expand_expr(
+    fn expand_expr(
         &mut self,
         instance: &ConstructorInstance,
         expr: &Expression,
         env: &HashMap<LocalVarId, RuntimeValue>,
-        build_exports: &mut HashMap<TableId, RuntimeValue>,
+        build_exports: &mut BuildExports,
     ) -> Result<Expression, EmitError> {
         Ok(self
             .expand_value(instance, expr, env, build_exports)?
@@ -363,7 +382,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         instance: &ConstructorInstance,
         expr: &Expression,
         env: &HashMap<LocalVarId, RuntimeValue>,
-        build_exports: &mut HashMap<TableId, RuntimeValue>,
+        build_exports: &mut BuildExports,
     ) -> Result<RuntimeValue, EmitError> {
         let ty = match &expr.ty {
             ExpressionTy::SizedInt { .. } => return Ok(RuntimeValue::Expr(expr.clone())),
@@ -465,7 +484,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         instance: &ConstructorInstance,
         args: &[Expression],
         env: &HashMap<LocalVarId, RuntimeValue>,
-        build_exports: &mut HashMap<TableId, RuntimeValue>,
+        build_exports: &mut BuildExports,
     ) -> Result<Vec<Expression>, EmitError> {
         args.iter()
             .map(|arg| self.expand_expr(instance, arg, env, build_exports))
@@ -477,7 +496,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         instance: &ConstructorInstance,
         target: &LabelOrNode,
         env: &HashMap<LocalVarId, RuntimeValue>,
-        build_exports: &mut HashMap<TableId, RuntimeValue>,
+        build_exports: &mut BuildExports,
     ) -> Result<LabelOrNode, EmitError> {
         Ok(match target {
             LabelOrNode::Label(name) => LabelOrNode::Label(name.clone()),
@@ -514,7 +533,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         instance: &ConstructorInstance,
         ident: &Ident,
         env: &HashMap<LocalVarId, RuntimeValue>,
-        build_exports: &mut HashMap<TableId, RuntimeValue>,
+        build_exports: &mut BuildExports,
     ) -> Result<RuntimeValue, EmitError> {
         Ok(match ident {
             Ident::Register(_) | Ident::BitRange(_) => RuntimeValue::Expr(Expression {
@@ -562,7 +581,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         &mut self,
         instance: &ConstructorInstance,
         name: &str,
-        build_exports: &mut HashMap<TableId, RuntimeValue>,
+        build_exports: &mut BuildExports,
     ) -> Result<LabelOrNode, EmitError> {
         match self.spec.symbols.get(name).copied() {
             Some(SymbolId::Field(field_id)) => Ok(LabelOrNode::Expr(
