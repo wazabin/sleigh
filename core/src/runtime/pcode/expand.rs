@@ -132,12 +132,10 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
             self.next_var_id = own_end;
         }
 
-        let body: Vec<Ast> = pmacro.body_stripped().collect();
-        let export = pmacro.export_stripped();
         self.emit_body(
             instance,
-            &body,
-            export.as_ref(),
+            pmacro.runtime_body(),
+            pmacro.runtime_export(),
             &pmacro.non_build_table_refs,
             env,
         )
@@ -154,7 +152,10 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         if self.macro_stack.contains(&id) {
             return Err(EmitError::new("recursive p-code macro expansion"));
         }
-        let macro_def = &self.spec.pmacros[id];
+        // Take an independent copy of the specification reference so the
+        // macro's immutable template can stay borrowed while `self` emits it.
+        let spec = self.spec;
+        let macro_def = &spec.pmacros[id];
         if macro_def.args.len() != args.len() {
             return Err(EmitError::new(format!(
                 "p-code macro expected {} arguments, got {}",
@@ -162,14 +163,9 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
                 args.len()
             )));
         }
-        // Clone everything we need before releasing the immutable borrow on self.spec.
-        let macro_arg_ids: Vec<LocalVarId> = macro_def.args.clone();
-        let macro_body: Vec<Ast> = macro_def.body_stripped().collect();
-        let macro_export = macro_def.export_stripped();
-        let non_build_refs = macro_def.non_build_table_refs.clone();
 
         let mut env = HashMap::new();
-        for (&arg_id, arg) in macro_arg_ids.iter().zip(args) {
+        for (&arg_id, arg) in macro_def.args.iter().zip(args) {
             let arg = self.expand_expr(instance, arg, outer_env, build_exports)?;
             env.insert(arg_id, RuntimeValue::Expr(arg));
         }
@@ -177,9 +173,9 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         self.macro_stack.push(id);
         let export = self.emit_body(
             instance,
-            &macro_body,
-            macro_export.as_ref(),
-            &non_build_refs,
+            macro_def.runtime_body(),
+            macro_def.runtime_export(),
+            &macro_def.non_build_table_refs,
             &env,
         );
         self.macro_stack.pop();

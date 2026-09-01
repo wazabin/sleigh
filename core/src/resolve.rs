@@ -678,6 +678,8 @@ impl Resolver {
             body,
             export,
             non_build_table_refs: Vec::new(),
+            runtime_body: std::sync::OnceLock::new(),
+            runtime_export: std::sync::OnceLock::new(),
         };
         resolved.refresh_runtime_metadata(&self.ctx.symbols, &[]);
         Ok(resolved)

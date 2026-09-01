@@ -9,7 +9,10 @@ use crate::{
 };
 use jstd::registry::Registry;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::OnceLock,
+};
 
 pub(crate) mod expression;
 pub(crate) mod statement;
@@ -24,6 +27,13 @@ pub(crate) struct PCodeMacro {
     pub(crate) body: Vec<Ast<(usize, usize)>>,
     pub(crate) export: Option<Expression<(usize, usize)>>,
     pub(crate) non_build_table_refs: Vec<TableId>,
+    /// Span-free copies used by the runtime p-code expander. Kept out of the
+    /// serialized specification: they are built lazily once per semantic body,
+    /// then shared by every decoded instance of that constructor.
+    #[serde(skip)]
+    pub(crate) runtime_body: OnceLock<Vec<Ast>>,
+    #[serde(skip)]
+    pub(crate) runtime_export: OnceLock<Option<Expression>>,
 }
 
 impl PCodeMacro {
@@ -34,6 +44,8 @@ impl PCodeMacro {
             body: Vec::new(),
             export: None,
             non_build_table_refs: Vec::new(),
+            runtime_body: OnceLock::new(),
+            runtime_export: OnceLock::new(),
         }
     }
 
@@ -65,6 +77,8 @@ impl PCodeMacro {
         let env = HashMap::new();
 
         self.body = expander.expand_body(&self.body, &env, 0, None)?;
+        self.runtime_body = OnceLock::new();
+        self.runtime_export = OnceLock::new();
 
         if let Some(export) = self.export.clone() {
             let (prefix, export) = expander.expand_expr(export, &env, 0)?;
@@ -112,6 +126,19 @@ impl PCodeMacro {
 
     pub(crate) fn export_stripped(&self) -> Option<Expression> {
         self.export.as_ref().map(|e| e.clone().strip_span())
+    }
+
+    /// Returns a shared, span-free semantic body for runtime expansion.
+    pub(crate) fn runtime_body(&self) -> &[Ast] {
+        self.runtime_body
+            .get_or_init(|| self.body_stripped().collect())
+    }
+
+    /// Returns the shared, span-free export expression for runtime expansion.
+    pub(crate) fn runtime_export(&self) -> Option<&Expression> {
+        self.runtime_export
+            .get_or_init(|| self.export_stripped())
+            .as_ref()
     }
 }
 
