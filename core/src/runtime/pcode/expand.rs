@@ -7,7 +7,9 @@ struct BuildExports(Option<HashMap<TableId, RuntimeValue>>);
 
 impl BuildExports {
     fn contains_key(&self, table: &TableId) -> bool {
-        self.0.as_ref().is_some_and(|exports| exports.contains_key(table))
+        self.0
+            .as_ref()
+            .is_some_and(|exports| exports.contains_key(table))
     }
 
     fn get(&self, table: &TableId) -> Option<&RuntimeValue> {
@@ -31,7 +33,7 @@ use crate::{
         },
         statement::{Ast, AstNode, LabelOrNode},
     },
-    runtime::pcode::{RuntimeValue, collect},
+    runtime::pcode::{RuntimeValue, collect, runtime_value_size},
     semantics::{EmitError, PcodeStatement},
     spec::Spec,
 };
@@ -39,6 +41,14 @@ use crate::{
 pub(crate) struct PcodeExpander<'spec, 'i> {
     spec: &'spec Spec,
     pub(crate) stmts: Vec<PcodeStatement>,
+
+    /// Local widths resolved from each spliced body's compile-time widths,
+    /// keyed by the rebased id the emitted statements use.
+    pub(crate) local_sizes: pcode_types::LocalSizes,
+
+    /// Cleared when a body's compile-time widths could not be resolved, so the
+    /// consumer falls back to inferring them from the expanded statements.
+    pub(crate) widths_resolved: bool,
     macro_stack: Vec<PMacroId>,
     /// Monotonically increasing counter: next available `LocalVarId` for this decode.
     next_var_id: u32,
@@ -76,6 +86,8 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         Self {
             spec,
             stmts: Vec::new(),
+            local_sizes: pcode_types::LocalSizes::default(),
+            widths_resolved: true,
             macro_stack: Vec::new(),
             next_var_id: 0,
             current_base: 0,
@@ -156,6 +168,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
             pmacro.runtime_body(),
             pmacro.runtime_export(),
             &pmacro.non_build_table_refs,
+            &pmacro.local_widths,
             env,
         )
     }
@@ -195,6 +208,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
             macro_def.runtime_body(),
             macro_def.runtime_export(),
             &macro_def.non_build_table_refs,
+            &macro_def.local_widths,
             &env,
         );
         self.macro_stack.pop();
@@ -207,8 +221,10 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         body: &[Ast],
         export: Option<&Expression>,
         non_build_table_refs: &[TableId],
+        local_widths: &HashMap<LocalVarId, pcode_types::SymbolicWidth>,
         env: &HashMap<LocalVarId, RuntimeValue>,
     ) -> Result<Option<RuntimeValue>, EmitError> {
+        let base = self.current_base;
         let mut build_exports = BuildExports::default();
 
         // Pre-emit all non-`build` subtable references.
@@ -224,9 +240,38 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         for stmt in body {
             self.emit_stmt(instance, stmt, env, &mut build_exports)?;
         }
+        // Resolve this body's widths now: a width naming a table operand needs
+        // that operand's export, which only exists once the body has been
+        // emitted.
+        self.resolve_local_widths(base, local_widths, &build_exports);
         export
             .map(|expr| self.expand_export_value(instance, expr, env, &mut build_exports))
             .transpose()
+    }
+
+    /// Rebases one body's compile-time widths into the ids its emitted
+    /// statements use, resolving any that name an operand.
+    fn resolve_local_widths(
+        &mut self,
+        base: u32,
+        local_widths: &HashMap<LocalVarId, pcode_types::SymbolicWidth>,
+        build_exports: &BuildExports,
+    ) {
+        for (id, width) in local_widths {
+            let size = match width {
+                pcode_types::SymbolicWidth::Fixed(size) => Some(*size),
+                pcode_types::SymbolicWidth::SameAs(pcode_types::OperandKey::Table(table)) => {
+                    build_exports.get(table).and_then(runtime_value_size)
+                }
+                pcode_types::SymbolicWidth::SameAs(pcode_types::OperandKey::Field(_)) => None,
+            };
+            match size {
+                Some(size) => {
+                    self.local_sizes.insert(LocalVarId(base + id.0), size);
+                }
+                None => self.widths_resolved = false,
+            }
+        }
     }
 
     fn expand_export_value(

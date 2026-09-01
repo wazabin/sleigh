@@ -17,7 +17,7 @@ use std::{
 pub(crate) mod expression;
 pub(crate) mod statement;
 
-pub(crate) use pcode_types::PMacroId;
+pub(crate) use pcode_types::{PMacroId, SymbolicWidth};
 
 /// A compiled p-code macro definition, with per-statement byte spans for diagnostics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +27,14 @@ pub(crate) struct PCodeMacro {
     pub(crate) body: Vec<Ast<(usize, usize)>>,
     pub(crate) export: Option<Expression<(usize, usize)>>,
     pub(crate) non_build_table_refs: Vec<TableId>,
+    /// Widths of this body's local variables, resolved when the specification
+    /// was compiled. A `SameAs` width names an operand whose value only a
+    /// decode supplies; the expander resolves those as it substitutes them.
+    ///
+    /// Resolving widths here rather than per decoded instruction is what lets
+    /// an unsizable local be reported against its own source, and lets the
+    /// per-instruction planner skip its fixed point entirely.
+    pub(crate) local_widths: HashMap<LocalVarId, SymbolicWidth>,
     /// Span-free copies used by the runtime p-code expander. Kept out of the
     /// serialized specification: they are built lazily once per semantic body,
     /// then shared by every decoded instance of that constructor.
@@ -44,6 +52,7 @@ impl PCodeMacro {
             body: Vec::new(),
             export: None,
             non_build_table_refs: Vec::new(),
+            local_widths: HashMap::new(),
             runtime_body: OnceLock::new(),
             runtime_export: OnceLock::new(),
         }

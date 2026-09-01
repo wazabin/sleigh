@@ -14,11 +14,26 @@ pub(super) fn pcode_ast_for_instance(
     spec: &Spec,
     instance: &ConstructorInstance,
 ) -> Result<PcodeAst, EmitError> {
+    Ok(expanded_instance(spec, instance)?.0)
+}
+
+/// The expanded AST plus the local widths the specification already resolved.
+///
+/// The widths are `None` when a spliced body had one this decode could not
+/// resolve, so the caller infers them from the statements instead.
+pub(super) fn expanded_instance(
+    spec: &Spec,
+    instance: &ConstructorInstance,
+) -> Result<(PcodeAst, Option<pcode_types::LocalSizes>), EmitError> {
     let mut expander = expand::PcodeExpander::new(spec, instance);
     expander.emit_instance(instance, &Default::default())?;
-    Ok(PcodeAst {
-        statements: expander.stmts,
-    })
+    let widths = expander.widths_resolved.then_some(expander.local_sizes);
+    Ok((
+        PcodeAst {
+            statements: expander.stmts,
+        },
+        widths,
+    ))
 }
 
 /// The address a sub-table operand exports, when it is a compile-time constant.
@@ -91,6 +106,14 @@ pub(crate) enum RuntimeValue {
         space: SpaceId,
         size: usize,
     },
+}
+
+/// The width of the value an operand exports, when it has one.
+pub(crate) fn runtime_value_size(value: &RuntimeValue) -> Option<usize> {
+    match value {
+        RuntimeValue::Expr(expr) => expr.size,
+        RuntimeValue::Address { size, .. } => Some(*size),
+    }
 }
 
 impl RuntimeValue {

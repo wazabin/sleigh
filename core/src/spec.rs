@@ -11,7 +11,7 @@ use crate::{
     tree::{Tree, TreeId},
 };
 use jstd::registry::{Identified, Registry};
-use pcode_types::{PCodeOpId, Register, RegisterId, Space, SpaceId};
+use pcode_types::{LocalVarId, PCodeOpId, Register, RegisterId, Space, SpaceId, SymbolicWidth};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -165,12 +165,54 @@ impl Spec {
             needs_lookahead: false,
         };
         spec.refresh_runtime_metadata();
+        spec.resolve_local_widths();
         spec.needs_lookahead = spec.trees.iter().any(|tree| {
             tree.constructors
                 .iter()
                 .any(|c| c.delay_slot.is_some() || c.uses_inst_next2)
         });
         spec
+    }
+
+    /// Resolves every p-code body's local widths once, when the specification
+    /// is compiled, so no decode has to rediscover them.
+    ///
+    /// A width that depends on an operand a decode substitutes is kept
+    /// symbolic rather than dropped: dropping it would let a later statement
+    /// establish a *different* width than the one the substituted value gives.
+    fn resolve_local_widths(&mut self) {
+        let widths: Vec<Vec<HashMap<LocalVarId, SymbolicWidth>>> = {
+            let context = crate::runtime::InstructionPcodeContext::new(self);
+            self.trees
+                .iter()
+                .map(|tree| {
+                    tree.constructors
+                        .iter()
+                        .map(|constructor| {
+                            pcode_types::infer_local_sizes(&constructor.pmacro.body, &context)
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let macro_widths: Vec<HashMap<LocalVarId, SymbolicWidth>> = {
+            let context = crate::runtime::InstructionPcodeContext::new(self);
+            self.pmacros
+                .iter()
+                .map(|pmacro| pcode_types::infer_local_sizes(&pmacro.body, &context))
+                .collect()
+        };
+
+        for (tree_widths, mut tree) in widths.into_iter().zip(self.trees.iter_mut()) {
+            for (widths, mut constructor) in
+                tree_widths.into_iter().zip(tree.constructors.iter_mut())
+            {
+                constructor.pmacro.local_widths = widths;
+            }
+        }
+        for (widths, mut pmacro) in macro_widths.into_iter().zip(self.pmacros.iter_mut()) {
+            pmacro.local_widths = widths;
+        }
     }
 
     fn refresh_runtime_metadata(&mut self) {
