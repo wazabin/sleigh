@@ -32,6 +32,7 @@
 pub mod annotate;
 pub mod bitrange;
 pub mod compile;
+pub mod diagnostic;
 /// Read-only views over the compiled specification's *symbolic* structures.
 ///
 /// **Unstable.** Behind the `unstable-introspect` feature and exempt from this
@@ -40,7 +41,6 @@ pub mod compile;
 /// consumer.
 #[cfg(feature = "unstable-introspect")]
 pub mod introspect;
-pub mod diagnostic;
 pub mod pcode_error;
 pub mod runtime;
 pub mod semantics;
@@ -84,8 +84,9 @@ pub use diagnostic::{CompileError, Diagnostic, DiagnosticCode, DiagnosticLabel, 
 pub use objects::field::FieldId;
 pub use pcode_error::{PcodeError, PcodeErrorTy, PcodeResult};
 pub use pcode_types::{
-    BitRangeInfo, InstructionPcode, Opcode, PcodeLowerError, PcodeLoweringContext, PcodeOp,
-    RegisterId, SPACE_CONST, Space, SpaceId, SpaceType, Varnode, lower_instruction,
+    BitRangeInfo, InstructionPcode, LabelId, Opcode, PcodeLowerError, PcodeLoweringContext,
+    PcodeOp, PcodePlan, PcodeSink, RegisterId, SPACE_CONST, Space, SpaceId, SpaceType, Varnode,
+    lower_instruction,
 };
 pub use runtime::{
     CompiledSpec, ConstructorMatch, Context, ContextBytes, ContextDatabase, ContextEffect,

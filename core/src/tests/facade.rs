@@ -1,7 +1,7 @@
 use crate::{
     Builtin, CompiledSpec, Compiler, ContextBytes, ContextDatabase, ContextEffect, ContextError,
-    ContextScope, DecodeError, Decoder, DelaySlotError, Instruction, Opcode, RegisterId, SourceDb,
-    SpaceId, SpaceType, analyze,
+    ContextScope, DecodeError, Decoder, DelaySlotError, Instruction, LabelId, Opcode, PcodeSink,
+    RegisterId, SourceDb, SpaceId, SpaceType, Varnode, analyze,
     semantics::{
         EmitError, InstructionInfo, PcodeAst, PcodeBinaryOp, PcodeExprKind, PcodeIdent, PcodeLoad,
         PcodeRange, PcodeSpaceRef, PcodeStatementKind, PcodeTarget, RangeParam, SemanticsSink,
@@ -583,6 +583,79 @@ fn pcode_ops_lower_expanded_ranges_into_raw_operations() {
             .filter_map(|op| op.output)
             .any(|output| output.space == unique.id)
     );
+}
+
+#[test]
+fn streamed_pcode_reports_plan_labels_before_operations() {
+    let sources = Box::leak(Box::new(SourceDb::new()));
+    let root = sources.add_file("semantics.sla", SEMANTIC_BRANCH_FIXTURE);
+    let spec = Box::leak(Box::new(Compiler::new(sources).compile(root).unwrap()));
+    let context = spec.new_context();
+
+    #[derive(Default)]
+    struct Trace {
+        labels: Vec<String>,
+        events: Vec<String>,
+    }
+
+    impl PcodeSink for Trace {
+        fn op(&mut self, opcode: Opcode, _output: Option<Varnode>, _inputs: &[Varnode]) {
+            self.events.push(format!("{opcode:?}"));
+        }
+
+        fn label(&mut self, label: LabelId) {
+            self.events.push(format!("label {}", label.index()));
+        }
+
+        fn branch_label(&mut self, opcode: Opcode, label: LabelId, _condition: Option<Varnode>) {
+            self.events.push(format!("{opcode:?} -> {}", label.index()));
+        }
+    }
+
+    // `if reg == 0 goto <done>; reg = 1:4; <done>`
+    let instruction = Decoder::new(spec)
+        .decode_one(0x1000, &[0x02], &context)
+        .unwrap();
+    let trace = instruction
+        .pcode_ops_streamed(|plan| Trace {
+            labels: plan
+                .labels()
+                .iter()
+                .map(|label| label.to_string())
+                .collect(),
+            ..Trace::default()
+        })
+        .unwrap();
+    assert_eq!(trace.labels, vec!["done".to_string()]);
+    assert_eq!(
+        trace.events,
+        vec![
+            "IntEqual".to_string(),
+            "CBranch -> 0".to_string(),
+            "Copy".to_string(),
+            "label 0".to_string(),
+        ]
+    );
+
+    // A direct branch out of the instruction is planned, not streamed as a
+    // label, and the collecting API still resolves the same operations.
+    let instruction = Decoder::new(spec)
+        .decode_one(0x1000, &[0x09], &context)
+        .unwrap();
+    let planned = instruction
+        .pcode_ops_streamed(|plan| {
+            let branches = plan.direct_branches().to_vec();
+            Trace {
+                labels: branches
+                    .iter()
+                    .map(|target| format!("{target:#x}"))
+                    .collect(),
+                ..Trace::default()
+            }
+        })
+        .unwrap();
+    assert_eq!(planned.labels, vec!["0x1001".to_string()]);
+    assert_eq!(planned.events, vec!["Branch".to_string()]);
 }
 
 #[test]

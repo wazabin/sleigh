@@ -25,8 +25,9 @@ pub use context::{Context, ContextBytes, ContextError};
 pub use context_db::ContextDatabase;
 pub use effects::{ContextEffect, ContextScope};
 use pcode_types::{
-    BitRangeInfo, InstructionPcode, PcodeLoweringContext, PcodeOp, RegisterId, SpaceId, Varnode,
-    lower_instruction, lower_instruction_into,
+    BitRangeInfo, InstructionPcode, PcodeLoweringContext, PcodeOp, PcodePlan, PcodeSink,
+    RegisterId, SpaceId, Varnode, emit_instruction, lower_instruction, lower_instruction_into,
+    plan_instruction,
 };
 pub use refs::{FieldRef, RegisterRef, SpaceRef, SymbolKind, SymbolRef, TableRef, TokenRef};
 use serde::{Deserialize, Serialize};
@@ -631,12 +632,29 @@ impl<'spec, 'bytes> Instruction<'spec, 'bytes> {
     /// serialization, and differential tests.
     pub fn pcode_ops_into<R>(&self, sink: impl FnOnce(&[PcodeOp]) -> R) -> Result<R, EmitError> {
         let ast = self.pcode_ast()?;
-        lower_instruction_into(
-            &ast,
-            &InstructionPcodeContext::new(&self.spec.spec),
-            sink,
-        )
-        .map_err(|error| EmitError::new(error.to_string()))
+        lower_instruction_into(&ast, &InstructionPcodeContext::new(&self.spec.spec), sink)
+            .map_err(|error| EmitError::new(error.to_string()))
+    }
+
+    /// Plans this instruction's flat p-code, then streams it into a sink.
+    ///
+    /// `make_sink` receives the [`PcodePlan`] — the labels and the branch and
+    /// call destinations of the whole instruction — so a consumer can prepare
+    /// its instruction-wide state before any operation arrives, and never has
+    /// to re-scan a flat p-code vector. The sink is returned so the consumer
+    /// can recover its result.
+    pub fn pcode_ops_streamed<S: PcodeSink>(
+        &self,
+        make_sink: impl FnOnce(&PcodePlan) -> S,
+    ) -> Result<S, EmitError> {
+        let ast = self.pcode_ast()?;
+        let context = InstructionPcodeContext::new(&self.spec.spec);
+        let plan =
+            plan_instruction(&ast, &context).map_err(|error| EmitError::new(error.to_string()))?;
+        let mut sink = make_sink(&plan);
+        emit_instruction(&ast, &context, &plan, &mut sink)
+            .map_err(|error| EmitError::new(error.to_string()))?;
+        Ok(sink)
     }
 
     /// Alias for [`pcode_ops`](Self::pcode_ops).
