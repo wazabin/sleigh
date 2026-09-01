@@ -25,8 +25,8 @@ pub use context::{Context, ContextBytes, ContextError};
 pub use context_db::ContextDatabase;
 pub use effects::{ContextEffect, ContextScope};
 use pcode_types::{
-    BitRangeInfo, InstructionPcode, PcodeLoweringContext, RegisterId, SpaceId, Varnode,
-    lower_instruction,
+    BitRangeInfo, InstructionPcode, PcodeLoweringContext, PcodeOp, RegisterId, SpaceId, Varnode,
+    lower_instruction, lower_instruction_into,
 };
 pub use refs::{FieldRef, RegisterRef, SpaceRef, SymbolKind, SymbolRef, TableRef, TokenRef};
 use serde::{Deserialize, Serialize};
@@ -620,6 +620,23 @@ impl<'spec, 'bytes> Instruction<'spec, 'bytes> {
         let ast = self.pcode_ast()?;
         lower_instruction(&ast, &InstructionPcodeContext::new(&self.spec.spec))
             .map_err(|error| EmitError::new(error.to_string()))
+    }
+
+    /// Lowers flat p-code into `sink` without returning an owned
+    /// [`InstructionPcode`].
+    ///
+    /// This is the production-path counterpart to [`pcode_ops`](Self::pcode_ops):
+    /// consumers can synchronously lower the resolved p-code while it remains
+    /// internal to this call. `pcode_ops` remains available for inspection,
+    /// serialization, and differential tests.
+    pub fn pcode_ops_into<R>(&self, sink: impl FnOnce(&[PcodeOp]) -> R) -> Result<R, EmitError> {
+        let ast = self.pcode_ast()?;
+        lower_instruction_into(
+            &ast,
+            &InstructionPcodeContext::new(&self.spec.spec),
+            sink,
+        )
+        .map_err(|error| EmitError::new(error.to_string()))
     }
 
     /// Alias for [`pcode_ops`](Self::pcode_ops).
