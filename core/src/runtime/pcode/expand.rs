@@ -26,7 +26,7 @@ use crate::{
     instance::ConstructorInstance,
     objects::table::TableId,
     pmacro::{
-        PMacroId,
+        BodyTemplate, PMacroId,
         expression::{
             Expression, ExpressionTy, Ident, Load, LocalVarId, Range, RangeParam, SpaceRef,
             ident_size, infer_expr_size,
@@ -163,14 +163,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
             self.next_var_id = own_end;
         }
 
-        self.emit_body(
-            instance,
-            pmacro.runtime_body(),
-            pmacro.runtime_export(),
-            &pmacro.non_build_table_refs,
-            &pmacro.local_widths,
-            env,
-        )
+        self.emit_body(instance, pmacro.template(), env)
     }
 
     fn emit_macro_call(
@@ -203,14 +196,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         }
 
         self.macro_stack.push(id);
-        let export = self.emit_body(
-            instance,
-            macro_def.runtime_body(),
-            macro_def.runtime_export(),
-            &macro_def.non_build_table_refs,
-            &macro_def.local_widths,
-            &env,
-        );
+        let export = self.emit_body(instance, macro_def.template(), &env);
         self.macro_stack.pop();
         export
     }
@@ -218,12 +204,16 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
     fn emit_body(
         &mut self,
         instance: &ConstructorInstance,
-        body: &[Ast],
-        export: Option<&Expression>,
-        non_build_table_refs: &[TableId],
-        local_widths: &HashMap<LocalVarId, pcode_types::SymbolicWidth>,
+        template: BodyTemplate<'_>,
         env: &HashMap<LocalVarId, RuntimeValue>,
     ) -> Result<Option<RuntimeValue>, EmitError> {
+        let BodyTemplate {
+            body,
+            export,
+            non_build_table_refs,
+            local_widths,
+            unsized_locals,
+        } = template;
         let base = self.current_base;
         let mut build_exports = BuildExports::default();
 
@@ -243,7 +233,7 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         // Resolve this body's widths now: a width naming a table operand needs
         // that operand's export, which only exists once the body has been
         // emitted.
-        self.resolve_local_widths(base, local_widths, &build_exports);
+        self.resolve_local_widths(base, local_widths, unsized_locals, &build_exports);
         export
             .map(|expr| self.expand_export_value(instance, expr, env, &mut build_exports))
             .transpose()
@@ -255,15 +245,20 @@ impl<'spec, 'i> PcodeExpander<'spec, 'i> {
         &mut self,
         base: u32,
         local_widths: &HashMap<LocalVarId, pcode_types::SymbolicWidth>,
+        unsized_locals: &[LocalVarId],
         build_exports: &BuildExports,
     ) {
+        // A body with a local nothing can size leaves the widths incomplete,
+        // whatever the rest of them resolved to.
+        if !unsized_locals.is_empty() {
+            self.widths_resolved = false;
+        }
         for (id, width) in local_widths {
             let size = match width {
                 pcode_types::SymbolicWidth::Fixed(size) => Some(*size),
-                pcode_types::SymbolicWidth::SameAs(pcode_types::OperandKey::Table(table)) => {
+                pcode_types::SymbolicWidth::SameAs(table) => {
                     build_exports.get(table).and_then(runtime_value_size)
                 }
-                pcode_types::SymbolicWidth::SameAs(pcode_types::OperandKey::Field(_)) => None,
             };
             match size {
                 Some(size) => {

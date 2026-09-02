@@ -679,6 +679,7 @@ impl Resolver {
             export,
             non_build_table_refs: Vec::new(),
             local_widths: std::collections::HashMap::new(),
+            unsized_locals: Vec::new(),
             runtime_body: std::sync::OnceLock::new(),
             runtime_export: std::sync::OnceLock::new(),
         };

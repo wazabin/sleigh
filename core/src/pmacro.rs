@@ -35,6 +35,12 @@ pub(crate) struct PCodeMacro {
     /// an unsizable local be reported against its own source, and lets the
     /// per-instruction planner skip its fixed point entirely.
     pub(crate) local_widths: HashMap<LocalVarId, SymbolicWidth>,
+
+    /// Locals this body uses that no width could be resolved for. Nothing a
+    /// decode substitutes can give them one, so they are a defect in the
+    /// specification; the expander falls back to per-instruction inference for
+    /// any instruction that splices such a body.
+    pub(crate) unsized_locals: Vec<LocalVarId>,
     /// Span-free copies used by the runtime p-code expander. Kept out of the
     /// serialized specification: they are built lazily once per semantic body,
     /// then shared by every decoded instance of that constructor.
@@ -44,7 +50,28 @@ pub(crate) struct PCodeMacro {
     pub(crate) runtime_export: OnceLock<Option<Expression>>,
 }
 
+/// One p-code body as the runtime expander consumes it: its span-free
+/// statements together with everything the specification resolved about them.
+pub(crate) struct BodyTemplate<'a> {
+    pub(crate) body: &'a [Ast],
+    pub(crate) export: Option<&'a Expression>,
+    pub(crate) non_build_table_refs: &'a [TableId],
+    pub(crate) local_widths: &'a HashMap<LocalVarId, SymbolicWidth>,
+    pub(crate) unsized_locals: &'a [LocalVarId],
+}
+
 impl PCodeMacro {
+    /// This body as the expander consumes it.
+    pub(crate) fn template(&self) -> BodyTemplate<'_> {
+        BodyTemplate {
+            body: self.runtime_body(),
+            export: self.runtime_export(),
+            non_build_table_refs: &self.non_build_table_refs,
+            local_widths: &self.local_widths,
+            unsized_locals: &self.unsized_locals,
+        }
+    }
+
     pub(crate) fn empty() -> Self {
         Self {
             args: Vec::new(),
@@ -53,6 +80,7 @@ impl PCodeMacro {
             export: None,
             non_build_table_refs: Vec::new(),
             local_widths: HashMap::new(),
+            unsized_locals: Vec::new(),
             runtime_body: OnceLock::new(),
             runtime_export: OnceLock::new(),
         }

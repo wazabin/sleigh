@@ -11,7 +11,7 @@ use crate::{
     tree::{Tree, TreeId},
 };
 use jstd::registry::{Identified, Registry};
-use pcode_types::{LocalVarId, PCodeOpId, Register, RegisterId, Space, SpaceId, SymbolicWidth};
+use pcode_types::{PCodeOpId, Register, RegisterId, Space, SpaceId, SymbolicWidth};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -181,7 +181,7 @@ impl Spec {
     /// symbolic rather than dropped: dropping it would let a later statement
     /// establish a *different* width than the one the substituted value gives.
     fn resolve_local_widths(&mut self) {
-        let widths: Vec<Vec<HashMap<LocalVarId, SymbolicWidth>>> = {
+        let widths: Vec<Vec<pcode_types::BodyWidths<SymbolicWidth>>> = {
             let context = crate::runtime::InstructionPcodeContext::new(self);
             self.trees
                 .iter()
@@ -189,17 +189,17 @@ impl Spec {
                     tree.constructors
                         .iter()
                         .map(|constructor| {
-                            pcode_types::infer_local_sizes(&constructor.pmacro.body, &context)
+                            pcode_types::resolve_body_widths(&constructor.pmacro.body, &context)
                         })
                         .collect()
                 })
                 .collect()
         };
-        let macro_widths: Vec<HashMap<LocalVarId, SymbolicWidth>> = {
+        let macro_widths: Vec<pcode_types::BodyWidths<SymbolicWidth>> = {
             let context = crate::runtime::InstructionPcodeContext::new(self);
             self.pmacros
                 .iter()
-                .map(|pmacro| pcode_types::infer_local_sizes(&pmacro.body, &context))
+                .map(|pmacro| pcode_types::resolve_body_widths(&pmacro.body, &context))
                 .collect()
         };
 
@@ -207,11 +207,13 @@ impl Spec {
             for (widths, mut constructor) in
                 tree_widths.into_iter().zip(tree.constructors.iter_mut())
             {
-                constructor.pmacro.local_widths = widths;
+                constructor.pmacro.local_widths = widths.widths;
+                constructor.pmacro.unsized_locals = widths.unsized_locals;
             }
         }
         for (widths, mut pmacro) in macro_widths.into_iter().zip(self.pmacros.iter_mut()) {
-            pmacro.local_widths = widths;
+            pmacro.local_widths = widths.widths;
+            pmacro.unsized_locals = widths.unsized_locals;
         }
     }
 

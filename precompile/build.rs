@@ -4,7 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use sleigh::{Annotations, CompileOptions, CompiledSpec, Compiler, ContextBytes, SourceDb, annotate};
+use sleigh::{
+    Annotations, CompileOptions, CompiledSpec, Compiler, ContextBytes, SourceDb, annotate,
+};
 
 #[derive(serde::Deserialize)]
 struct Arch {
@@ -24,6 +26,24 @@ fn main() {
         }
 
         compile_arch(&name, &arch);
+    }
+}
+
+/// Reports constructors whose p-code has a local nothing can size.
+///
+/// These are resolved when the specification is compiled, so they belong here
+/// rather than at lift time: no encoding of the constructor can supply the
+/// missing width.
+fn report_unsized_locals(name: &str, spec: &CompiledSpec, sources: &SourceDb) {
+    for (file, start, end, count) in spec.unsized_locals() {
+        let location = sources
+            .path(file)
+            .map(|path| format!("{}:{start}..{end}", path.display()))
+            .unwrap_or_else(|| format!("{file:?}:{start}..{end}"));
+        println!(
+            "cargo::warning={name}: {count} p-code local(s) with no resolvable width in the \
+             constructor at {location}"
+        );
     }
 }
 
@@ -52,6 +72,8 @@ fn compile_arch(name: &str, arch: &Arch) {
         })
         .compile(root)
         .unwrap_or_else(|error| panic!("Error compiling {name}: {error}"));
+
+    report_unsized_locals(name, &compiled, &sources);
 
     // Resolve the `#@family` markers here rather than at run time: the
     // serialized specification travels without its source text.

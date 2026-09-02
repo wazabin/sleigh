@@ -93,6 +93,36 @@ pub struct CompiledSpec {
 }
 
 impl CompiledSpec {
+    /// Constructors whose p-code has a local variable with no width, and that
+    /// nothing a decode can supply one for.
+    ///
+    /// A SLEIGH local takes its width from its uses. When none of them gives
+    /// one — the name was never declared, or every use is a width-less literal
+    /// — the body cannot be lowered, and no encoding of that constructor can
+    /// change it. Widths are resolved when the specification is compiled, so
+    /// this is a property of the specification rather than of a decode, and a
+    /// tool that compiles a specification should report it there.
+    ///
+    /// Each item is the constructor's source file, its byte range in that
+    /// file, and how many of its locals are unsizable.
+    pub fn unsized_locals(&self) -> impl Iterator<Item = (crate::FileId, usize, usize, usize)> {
+        self.spec.trees.iter().flat_map(|tree| {
+            tree.constructors
+                .iter()
+                .filter(|constructor| !constructor.pmacro.unsized_locals.is_empty())
+                .map(|constructor| {
+                    let src = constructor.src;
+                    (
+                        crate::FileId::from_index(src.file as usize),
+                        src.start as usize,
+                        src.end as usize,
+                        constructor.pmacro.unsized_locals.len(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+    }
+
     pub(crate) fn from_spec(spec: Spec) -> Self {
         let context_len = spec.context_len() as crate::Size;
         Self {

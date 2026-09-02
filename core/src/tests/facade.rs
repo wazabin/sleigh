@@ -585,6 +585,51 @@ fn pcode_ops_lower_expanded_ranges_into_raw_operations() {
     );
 }
 
+/// A local nothing can give a width to is a property of the specification, so
+/// it is reported when the specification is compiled rather than when an
+/// instruction that uses it happens to be lifted.
+#[test]
+fn unsizable_locals_are_reported_against_their_constructor() {
+    let mut sources = SourceDb::new();
+    let root = sources.add_file(
+        "unsized.slaspec",
+        "define endian=little;
+         define space ram type=ram_space size=4 default;
+         define space register type=register_space size=4;
+         define register offset=0 size=4 [ r0 ];
+         define token instr(8) op=(0,7);
+         define pcodeop myop;
+         :good is op=1 { local tmp = r0 + 1; r0 = tmp; }
+         :bad is op=2 { myop(nowidth); }",
+    );
+    let spec = Compiler::new(&mut sources).compile(root).unwrap();
+
+    let reported: Vec<_> = spec.unsized_locals().collect();
+    assert_eq!(reported.len(), 1, "only `bad` has an unsizable local");
+    let (file, start, end, count) = reported[0];
+    assert_eq!(count, 1);
+    assert!(sources.text(file).unwrap()[start..end].contains(":bad"));
+
+    // The good constructor still lifts, and the bad one fails at lift time
+    // with the same error it always did — reporting is additive.
+    let decoder = Decoder::new(&spec);
+    let context = spec.new_context();
+    assert!(
+        decoder
+            .decode_one(0x1000, &[1], &context)
+            .unwrap()
+            .pcode_ops()
+            .is_ok()
+    );
+    assert!(
+        decoder
+            .decode_one(0x1000, &[2], &context)
+            .unwrap()
+            .pcode_ops()
+            .is_err()
+    );
+}
+
 #[test]
 fn streamed_pcode_reports_plan_labels_before_operations() {
     let sources = Box::leak(Box::new(SourceDb::new()));
