@@ -1,0 +1,83 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  # Override these repository variables when dependencies are hosted elsewhere.
+  JSTD_REPOSITORY: ${{ vars.JSTD_REPOSITORY || format('{0}/jstd', github.repository_owner) }}
+  PCODE_TYPES_REPOSITORY: ${{ vars.PCODE_TYPES_REPOSITORY || format('{0}/pcode', github.repository_owner) }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # wazabin-sleigh-precompile compiles the open_sleigh specifications in
+          # its build script, so the submodule has to be present to package it.
+          submodules: recursive
+
+      # The path dependencies in the root Cargo.toml must resolve for cargo to
+      # load the workspace at all, even though publishing uses the registry
+      # copies. Keep this in step with ci.yml.
+      - name: Check out local dependencies
+        run: |
+          git clone --depth=1 "https://github.com/${JSTD_REPOSITORY}.git" \
+            "$GITHUB_WORKSPACE/../wazabin-jstd"
+          git clone --depth=1 "https://github.com/${PCODE_TYPES_REPOSITORY}.git" \
+            "$GITHUB_WORKSPACE/../wazabin-pcode"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Verify tag matches workspace version
+        run: |
+          version="$(
+            cargo metadata --no-deps --format-version 1 |
+              python3 -c 'import json, sys; packages = json.load(sys.stdin)["packages"]; versions = {package["version"] for package in packages}; assert len(versions) == 1, f"package versions differ: {versions}"; print(versions.pop())'
+          )"
+
+          tag_version="${GITHUB_REF_NAME#v}"
+          test "$tag_version" = "$version" || {
+            echo "Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          }
+
+      - name: Publish wazabin-sleigh
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p wazabin-sleigh
+
+      # wazabin-sleigh-fmt and wazabin-sleigh-precompile both depend on
+      # wazabin-sleigh, which is not resolvable until the index catches up.
+      - name: Publish wazabin-sleigh-fmt after registry indexing
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          for attempt in {1..20}; do
+            if cargo publish -p wazabin-sleigh-fmt; then
+              exit 0
+            fi
+
+            echo "wazabin-sleigh is not indexed yet; retrying in 15 seconds..."
+            sleep 15
+          done
+          exit 1
+
+      - name: Publish wazabin-sleigh-precompile
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p wazabin-sleigh-precompile

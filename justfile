@@ -14,3 +14,7 @@ lint:
 
 test:
     cargo test --workspace --all-features
+
+# Set the release version, commit it, and create its v-tag.
+release version:
+    scripts/release.py "{{version}}"
