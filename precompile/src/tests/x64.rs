@@ -1484,13 +1484,13 @@ fn families_of(bytes: &[u8]) -> Vec<&'static str> {
 #[test]
 fn x64_constructors_carry_their_instruction_family() {
     for (bytes, family) in [
-        (b"\x90".as_slice(), "base"),                 // NOP
-        (b"\xd8\xc1".as_slice(), "x87"),               // FADD ST0,ST1
-        (b"\x0f\xfc\xc1".as_slice(), "mmx"),           // PADDB MM0,MM1
-        (b"\x66\x0f\xfc\xc1".as_slice(), "sse"),       // PADDB XMM0,XMM1
-        (b"\xc5\xf8\x58\xc1".as_slice(), "avx"),       // VADDPS XMM0,XMM0,XMM1
-        (b"\xf3\x0f\xbc\xc1".as_slice(), "bmi"),       // TZCNT EAX,ECX
-        (b"\x66\x0f\x38\xdb\xc1".as_slice(), "crypto"),    // AESIMC XMM0,XMM1
+        (b"\x90".as_slice(), "base"),                   // NOP
+        (b"\xd8\xc1".as_slice(), "x87"),                // FADD ST0,ST1
+        (b"\x0f\xfc\xc1".as_slice(), "mmx"),            // PADDB MM0,MM1
+        (b"\x66\x0f\xfc\xc1".as_slice(), "sse"),        // PADDB XMM0,XMM1
+        (b"\xc5\xf8\x58\xc1".as_slice(), "avx"),        // VADDPS XMM0,XMM0,XMM1
+        (b"\xf3\x0f\xbc\xc1".as_slice(), "bmi"),        // TZCNT EAX,ECX
+        (b"\x66\x0f\x38\xdb\xc1".as_slice(), "crypto"), // AESIMC XMM0,XMM1
     ] {
         let found = families_of(bytes);
         assert!(

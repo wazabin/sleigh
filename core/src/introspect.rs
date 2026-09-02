@@ -42,6 +42,7 @@
 
 use crate::{
     action::{Action, Atom, Expr},
+    action::{BinOp, GlobalSetAddr, UnOp},
     bitrange::BitRange,
     builder::Endian as InternalEndian,
     constructor::{Constructor, ConstructorId, DisplayElement},
@@ -49,7 +50,6 @@ use crate::{
         field::{Field, FieldId, FieldParent as InternalFieldParent, FieldType},
         table::TableId,
     },
-    action::{BinOp, GlobalSetAddr, UnOp},
     pattern::{CompiledPatternBlock, OperandType},
     pmacro::{PCodeMacro, PMacroId},
     runtime::CompiledSpec,
@@ -58,9 +58,7 @@ use crate::{
     token::TokenId,
     tree::{Tree, TreeId, TreeNode, TreeNodeId},
 };
-use pcode_types::{
-    Ast, BitRangeFieldId, DelaySlotArg, Expression, PCodeOpId, RegisterId, SpaceId,
-};
+use pcode_types::{Ast, BitRangeFieldId, DelaySlotArg, Expression, PCodeOpId, RegisterId, SpaceId};
 
 impl CompiledSpec {
     /// Opens a read-only view over this specification's symbolic structures.
