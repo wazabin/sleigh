@@ -1,5 +1,8 @@
 # wazabin-sleigh
 
+[![CI](https://github.com/wazabin/sleigh/actions/workflows/ci.yml/badge.svg)](https://github.com/wazabin/sleigh/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/wazabin-sleigh.svg)](https://crates.io/crates/wazabin-sleigh)
+
 A Rust implementation of SLEIGH, the processor-specification language Ghidra
 uses to describe instruction sets. Give it a `.slaspec` and some bytes; it
 gives you back the instruction, its assembly text, and its p-code semantics.
@@ -44,6 +47,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Developed by [Thalium](https://blog.thalium.re/about/).
+
 ## What you get
 
 - **Decoding** — [`Decoder::decode_one`] matches one instruction against the
@@ -72,3 +77,7 @@ A small command-line decoder ships with the crate:
 $ cargo run -p wazabin-sleigh --bin sleigh-decode -- ./src/tests/fixtures/example.sla 108c
 [0x0000] and r3,r4
 ```
+
+## License
+
+Licensed under the [MIT License](LICENSE).

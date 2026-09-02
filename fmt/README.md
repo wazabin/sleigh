@@ -1,5 +1,8 @@
 # wazabin-sleigh-fmt
 
+[![CI](https://github.com/wazabin/sleigh/actions/workflows/ci.yml/badge.svg)](https://github.com/wazabin/sleigh/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/wazabin-sleigh-fmt.svg)](https://crates.io/crates/wazabin-sleigh-fmt)
+
 A formatter for SLEIGH processor specifications — `rustfmt` for `.slaspec`
 and `.sinc` files.
 
@@ -17,3 +20,9 @@ is never edited, because the edit would land in the wrong file.
 
 If the source does not parse, nothing is formatted — a formatter that guesses
 at broken syntax destroys work.
+
+Developed by [Thalium](https://blog.thalium.re/about/).
+
+## License
+
+Licensed under the [MIT License](LICENSE).
