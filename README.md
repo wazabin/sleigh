@@ -20,6 +20,12 @@ Developed by [Thalium](https://blog.thalium.re/about/).
 cargo test --workspace
 ```
 
+Compatibility against the vendored Ghidra corpus is measured, not asserted:
+
+```sh
+cargo run -p wazabin-sleigh --example corpus
+```
+
 ## License
 
 The Rust code in this repository is licensed under the [MIT License](LICENSE).
