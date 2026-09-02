@@ -1,4 +1,4 @@
-# sleigh-precompile
+# wazabin-sleigh-precompile
 
 SLEIGH processor specifications compiled at build time and embedded in the
 binary.

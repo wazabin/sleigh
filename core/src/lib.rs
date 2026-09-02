@@ -49,7 +49,7 @@ pub mod source;
 ///
 /// **Unstable.** Behind the `unstable-syntax` feature and exempt from this
 /// crate's semantic versioning: it is the shape the compiler's own front end
-/// happens to use, and it changes whenever the front end does. `sleigh-fmt`
+/// happens to use, and it changes whenever the front end does. `wazabin-sleigh-fmt`
 /// is the intended consumer.
 #[cfg(feature = "unstable-syntax")]
 pub mod syntax;
@@ -105,7 +105,7 @@ pub use source::{
 };
 pub use syntax::{AnalysisResult, analyze};
 
-/// The source AST, re-exported at the crate root for `sleigh-fmt`.
+/// The source AST, re-exported at the crate root for `wazabin-sleigh-fmt`.
 ///
 /// **Unstable**, like the module itself: see [`syntax`].
 #[cfg(feature = "unstable-syntax")]

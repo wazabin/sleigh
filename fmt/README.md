@@ -1,4 +1,4 @@
-# sleigh-fmt
+# wazabin-sleigh-fmt
 
 A formatter for SLEIGH processor specifications — `rustfmt` for `.slaspec`
 and `.sinc` files.
@@ -7,7 +7,7 @@ It edits the original bytes rather than reprinting from a parse tree, so
 anything no rule has an opinion about is left exactly as written.
 
 ```text
-$ cargo run -p sleigh-fmt --bin sleigh-fmt -- path/to/spec.slaspec
+$ cargo run -p wazabin-sleigh-fmt --bin sleigh-fmt -- path/to/spec.slaspec
 ```
 
 A specification is usually several files stitched together by `@include`;

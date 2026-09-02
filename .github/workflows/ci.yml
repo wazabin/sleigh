@@ -16,20 +16,19 @@ concurrency:
 env:
   # Override these repository variables when dependencies are hosted elsewhere.
   JSTD_REPOSITORY: ${{ vars.JSTD_REPOSITORY || format('{0}/jstd', github.repository_owner) }}
-  PCODE_TYPES_REPOSITORY: ${{ vars.PCODE_TYPES_REPOSITORY || format('{0}/wazabin-pcode', github.repository_owner) }}
+  PCODE_TYPES_REPOSITORY: ${{ vars.PCODE_TYPES_REPOSITORY || format('{0}/pcode', github.repository_owner) }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check out unpublished dependencies
+      - name: Check out local dependencies
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/../../jstd" "$GITHUB_WORKSPACE/../../wazabin-pcode"
           git clone --depth=1 "https://github.com/${JSTD_REPOSITORY}.git" \
-            "$GITHUB_WORKSPACE/../../jstd/jstd"
+            "$GITHUB_WORKSPACE/../wazabin-jstd"
           git clone --depth=1 "https://github.com/${PCODE_TYPES_REPOSITORY}.git" \
-            "$GITHUB_WORKSPACE/../../wazabin-pcode/pcode-types"
+            "$GITHUB_WORKSPACE/../wazabin-pcode"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -41,13 +40,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check out unpublished dependencies
+      - name: Check out local dependencies
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/../../jstd" "$GITHUB_WORKSPACE/../../wazabin-pcode"
           git clone --depth=1 "https://github.com/${JSTD_REPOSITORY}.git" \
-            "$GITHUB_WORKSPACE/../../jstd/jstd"
+            "$GITHUB_WORKSPACE/../wazabin-jstd"
           git clone --depth=1 "https://github.com/${PCODE_TYPES_REPOSITORY}.git" \
-            "$GITHUB_WORKSPACE/../../wazabin-pcode/pcode-types"
+            "$GITHUB_WORKSPACE/../wazabin-pcode"
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo llvm-cov --workspace --all-features --fail-under-lines 75 --lcov --output-path lcov.info

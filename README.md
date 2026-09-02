@@ -6,8 +6,8 @@ language.
 This workspace contains:
 
 - `sleigh`: compiler and instruction decoder library, plus `sleigh-decode`.
-- `sleigh-fmt`: formatter for `.slaspec` and `.sinc` files.
-- `sleigh-precompile`: selected processor specifications embedded at build time.
+- `wazabin-sleigh-fmt`: formatter for `.slaspec` and `.sinc` files.
+- `wazabin-sleigh-precompile`: selected processor specifications embedded at build time.
 
 ## Development
 

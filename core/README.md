@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   with macros, sub-tables and delay slots already expanded. See the
   [`semantics`] module for the type graph and the conventions it follows.
 - **Source tooling** — [`analyze`] reports diagnostics and lints without
-  building a runtime specification. `sleigh-fmt` formats specification text.
+  building a runtime specification. `wazabin-sleigh-fmt` formats specification text.
 
 ## Scope
 

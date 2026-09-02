@@ -1,7 +1,7 @@
 //! Prints the `#@family` breakdown of a precompiled specification.
 //!
 //! ```text
-//! cargo run -p sleigh-precompile --example families
+//! cargo run -p wazabin-sleigh-precompile --example families
 //! ```
 
 use std::collections::BTreeMap;
