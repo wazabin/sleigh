@@ -1,7 +1,5 @@
 /* Page-specific additions to wazabin.css. */
 .strip { display: flex; align-items: center; gap: 8px; flex: none; height: 36px; padding: 0 12px; background: var(--chrome); border-bottom: 1px solid var(--border); }
-.preset-note { flex: none; padding: 8px 12px; color: var(--muted); border-bottom: 1px solid var(--border); background: var(--chrome); }
-.preset-note:empty, .preset-note[hidden] { display: none; }
 .pane.input { display: flex; flex-direction: column; }
 .pane.result { display: flex; flex-direction: column; }
 .listing.stale { opacity: .5; }
@@ -14,3 +12,33 @@
 .insn .addr { color: var(--muted); }
 .insn .bytes { color: var(--muted); }
 .pcode-line { color: var(--accent); padding-left: 2ch; }
+
+/* SLEIGH token classes from the crate's lexer, colours shared with metal-docs. */
+:root {
+  --tok-display: #0f766e; --tok-structure: #1f6feb; --tok-macro: #a5215f; --tok-label: #1f6feb;
+  --tok-comment: #6b7f8a; --tok-string: #0a6c4b; --tok-number: #a8531c; --tok-keyword: #7b2fa8;
+  --tok-directive: #a5215f; --tok-table: #0f766e; --tok-operator: #5a6b80;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --tok-display: #4fc4aa; --tok-structure: #7fa8f2; --tok-macro: #f08cb8; --tok-label: #7fa8f2;
+    --tok-comment: #8b96a5; --tok-string: #6fd39f; --tok-number: #e0a050; --tok-keyword: #c79bf0;
+    --tok-directive: #f08cb8; --tok-table: #4fc4aa; --tok-operator: #9099a6;
+  }
+}
+:root[data-theme="dark"] {
+  --tok-display: #4fc4aa; --tok-structure: #7fa8f2; --tok-macro: #f08cb8; --tok-label: #7fa8f2;
+  --tok-comment: #8b96a5; --tok-string: #6fd39f; --tok-number: #e0a050; --tok-keyword: #c79bf0;
+  --tok-directive: #f08cb8; --tok-table: #4fc4aa; --tok-operator: #9099a6;
+}
+.tok-display { color: var(--tok-display); font-weight: 650; }
+.tok-table { color: var(--tok-table); font-weight: 650; }
+.tok-structure { color: var(--tok-structure); font-weight: 700; }
+.tok-macro { color: var(--tok-macro); }
+.tok-directive { color: var(--tok-directive); font-weight: 650; }
+.tok-label { color: var(--tok-label); }
+.tok-comment { color: var(--tok-comment); font-style: italic; }
+.tok-string { color: var(--tok-string); }
+.tok-number { color: var(--tok-number); }
+.tok-keyword { color: var(--tok-keyword); font-weight: 650; }
+.tok-operator { color: var(--tok-operator); }

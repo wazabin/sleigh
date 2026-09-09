@@ -1,19 +1,44 @@
 //! Browser playground for `wazabin-sleigh`.
 //!
 //! Mirrors the `sleigh-compile` and `sleigh-disasm` examples' JSON shapes.
-//! [`compile`] compiles custom source text and keeps the result in a
-//! thread-local so [`decode`] can decode against it without recompiling.
-//! [`decode_preset`] decodes against one of the embedded precompiled specs
-//! instead. [`presets`] lists what the toolbar can offer, and [`sample`]
-//! returns the one self-contained custom spec the page opens with.
+//! [`compile`] compiles source text and keeps the result in a thread-local so
+//! [`decode`] can decode against it without recompiling. [`presets`] lists
+//! the small self-contained toy specifications the toolbar offers; each is
+//! ordinary editable source, not a precompiled bundle. [`highlight`] lexes
+//! source for the editor.
 
 use std::cell::RefCell;
 
 use serde::{Deserialize, Serialize};
-use sleigh::{CompileOptions, CompiledSpec, Compiler, Decoder, SourceDb};
+use sleigh::{
+    CompileOptions, CompiledSpec, Compiler, ContextDatabase, Decoder, SourceDb, highlight,
+};
 use wasm_bindgen::prelude::*;
 
-const SAMPLE_SPEC: &str = include_str!("../sample.slaspec");
+/// The toy specifications the toolbar offers: `(name, source, bytes, address)`.
+///
+/// Each is a self-contained ISA small enough to read in one sitting, with a
+/// byte string that decodes to a sensible program at the given address.
+const PRESETS: &[(&str, &str, &str, &str)] = &[
+    (
+        "toy8",
+        include_str!("../presets/toy8.slaspec"),
+        "16203b4450fa00",
+        "0x0",
+    ),
+    (
+        "toy16",
+        include_str!("../presets/toy16.slaspec"),
+        "12052464065046 0267fc8000",
+        "0x100",
+    ),
+    (
+        "toymode",
+        include_str!("../presets/toymode.slaspec"),
+        "302a0430341221081140 0010",
+        "0x0",
+    ),
+];
 
 thread_local! {
     static COMPILED: RefCell<Option<(SourceDb, CompiledSpec)>> = const { RefCell::new(None) };
@@ -205,17 +230,8 @@ struct DecodeArgs {
     pcode: bool,
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-struct DecodePresetArgs {
-    #[serde(flatten)]
-    inner: DecodeArgs,
-    arch: String,
-}
-
 #[derive(Serialize)]
 struct DecodeOutput {
-    arch: String,
     instructions: Vec<Insn>,
 }
 
@@ -236,32 +252,8 @@ pub fn decode(args: &str) -> String {
         Err(e) => return error(&format!("invalid arguments: {e}")),
     };
     COMPILED.with(|cell| match &*cell.borrow() {
-        Some((_, spec)) => run_decode(spec, &args, "custom"),
+        Some((_, spec)) => run_decode(spec, &args),
         None => error("no spec compiled yet; compile one first"),
-    })
-}
-
-/// Decodes against one of the embedded precompiled specs.
-#[wasm_bindgen]
-pub fn decode_preset(args: &str) -> String {
-    let args = match serde_json::from_str::<DecodePresetArgs>(args) {
-        Ok(args) => args,
-        Err(e) => return error(&format!("invalid arguments: {e}")),
-    };
-    let spec = match spec_for(&args.arch) {
-        Ok(spec) => spec,
-        Err(e) => return error(&e),
-    };
-    run_decode(spec, &args.inner, &args.arch)
-}
-
-fn spec_for(arch: &str) -> Result<&'static CompiledSpec, String> {
-    Ok(match arch {
-        "x64" => sleigh_precompile::x64::spec(),
-        "x86" => sleigh_precompile::x86::spec(),
-        "aarch64" => sleigh_precompile::aarch64::spec(),
-        "riscv" => sleigh_precompile::riscv::spec(),
-        other => return Err(format!("unknown arch '{other}' (x64, x86, aarch64, riscv)")),
     })
 }
 
@@ -288,7 +280,7 @@ fn parse_hex(value: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-fn run_decode(spec: &CompiledSpec, args: &DecodeArgs, arch: &str) -> String {
+fn run_decode(spec: &CompiledSpec, args: &DecodeArgs) -> String {
     let data = match parse_hex(&args.bytes) {
         Ok(data) => data,
         Err(e) => return error(&e),
@@ -299,12 +291,15 @@ fn run_decode(spec: &CompiledSpec, args: &DecodeArgs, arch: &str) -> String {
     };
 
     let decoder = Decoder::new(spec);
+    // A linear sweep with `globalset` effects carried forward, so a spec
+    // whose instructions switch modes decodes the way a disassembler would.
+    let mut context = ContextDatabase::new(spec);
     let limit = args.count.unwrap_or(usize::MAX);
     let mut instructions = Vec::new();
     let mut cursor = 0usize;
     while instructions.len() < limit && cursor < data.len() {
         let at = address + cursor as u64;
-        let decoded = decoder.decode_one(at, &data[cursor..], &spec.new_context());
+        let decoded = decoder.decode_one(at, &data[cursor..], &context.context_at(at));
         let instruction = match decoded {
             Ok(instruction) => instruction,
             Err(e) if instructions.is_empty() => {
@@ -312,6 +307,7 @@ fn run_decode(spec: &CompiledSpec, args: &DecodeArgs, arch: &str) -> String {
             }
             Err(_) => break,
         };
+        context.apply(&instruction);
         let len = instruction.len();
         let pcode = if args.pcode {
             match instruction.pcode_ast() {
@@ -329,71 +325,40 @@ fn run_decode(spec: &CompiledSpec, args: &DecodeArgs, arch: &str) -> String {
         });
         cursor += len;
     }
-    serde_json::to_string(&DecodeOutput { arch: arch.to_string(), instructions }).unwrap()
+    serde_json::to_string(&DecodeOutput { instructions }).unwrap()
 }
 
-// ── presets / sample ─────────────────────────────────────────────────────
+// ── presets / highlight ──────────────────────────────────────────────────
 
-/// The preset architectures the toolbar can offer, as `[{name, arch}]`.
+/// The toy specifications the toolbar offers, as
+/// `[{name, source, bytes, address}]`.
 #[wasm_bindgen]
 pub fn presets() -> String {
-    let list = serde_json::json!([
-        { "name": "custom", "arch": "custom" },
-        { "name": "x64", "arch": "x64" },
-        { "name": "x86", "arch": "x86" },
-        { "name": "aarch64", "arch": "aarch64" },
-        { "name": "riscv", "arch": "riscv" },
-    ]);
-    list.to_string()
-}
-
-/// Stats for one preset's already-compiled spec, in the `compile` shape
-/// (`ok: true`, no diagnostics, `compile_ms: 0`), since presets need no
-/// compiling.
-#[wasm_bindgen]
-pub fn preset_stats(arch: &str) -> String {
-    let spec = match spec_for(arch) {
-        Ok(spec) => spec,
-        Err(e) => return error(&e),
-    };
-    let registers = spec.registers().count();
-    let tables = spec
-        .symbols()
-        .filter(|s| matches!(s.kind, sleigh::SymbolKind::Table))
-        .count();
-    let context_fields = spec
-        .symbols()
-        .filter(|s| matches!(s.kind, sleigh::SymbolKind::Field))
-        .count();
-    let spaces: Vec<SpaceOut> = spec
-        .spaces()
-        .map(|s| SpaceOut {
-            name: s.name().map(str::to_string),
-            size: Some(s.address_size()),
-            wordsize: Some(s.word_size()),
+    let list: Vec<_> = PRESETS
+        .iter()
+        .map(|(name, source, bytes, address)| {
+            serde_json::json!({
+                "name": name,
+                "source": source,
+                "bytes": bytes,
+                "address": address,
+            })
         })
         .collect();
-    let default_space = spec
-        .spaces()
-        .find(|s| s.id == spec.default_space())
-        .and_then(|s| s.name().map(str::to_string));
-    serde_json::to_string(&CompileOutput {
-        ok: true,
-        diagnostics: Vec::new(),
-        registers,
-        tables,
-        context_fields,
-        spaces,
-        default_space,
-        compile_ms: 0.0,
-    })
-    .unwrap()
+    serde_json::Value::Array(list).to_string()
 }
 
-/// The self-contained custom spec the page opens with.
+/// Lexes `source` for the editor, as `[[start, end, kind], ...]` with byte
+/// offsets and the lowercase [`highlight::TokenKind`] name.
 #[wasm_bindgen]
-pub fn sample() -> String {
-    SAMPLE_SPEC.to_string()
+pub fn highlight(source: &str) -> String {
+    let list: Vec<_> = highlight::tokens(source)
+        .into_iter()
+        .map(|t| {
+            serde_json::json!([t.start, t.end, format!("{:?}", t.kind).to_lowercase()])
+        })
+        .collect();
+    serde_json::Value::Array(list).to_string()
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────

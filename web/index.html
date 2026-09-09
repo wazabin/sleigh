@@ -21,13 +21,7 @@
   </header>
 
   <div class="toolbar">
-    <label>Preset <select id="preset">
-      <option value="custom">custom</option>
-      <option value="x64">x64</option>
-      <option value="x86">x86</option>
-      <option value="aarch64">aarch64</option>
-      <option value="riscv">riscv</option>
-    </select></label>
+    <label>Preset <select id="preset" title="Toy ISAs, each a self-contained spec you can edit"></select></label>
     <label><input type="checkbox" id="lint"> Lint</label>
     <button id="compile" class="primary" title="Compile (Ctrl+Enter)">Compile</button>
     <span class="spacer"></span>
@@ -36,7 +30,6 @@
 
   <div class="split">
     <section class="pane input">
-      <div class="preset-note" id="preset-note" hidden></div>
       <textarea id="source"></textarea>
       <div class="diagnostics" id="diagnostics"></div>
     </section>

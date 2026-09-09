@@ -1,4 +1,4 @@
-import init, { compile, decode, decode_preset, presets, preset_stats, sample } from "./pkg/sleigh_web.js";
+import init, { compile, decode, highlight, presets } from "./pkg/sleigh_web.js";
 
 const $ = (id) => document.getElementById(id);
 const status = $("status");
@@ -22,7 +22,42 @@ const editor = CodeMirror.fromTextArea($("source"), {
   lineNumbers: true,
   lineWrapping: false,
   mode: null,
-  readOnly: false,
+});
+
+// ── Highlighting ──────────────────────────────────────────────────────────
+// The crate's tolerant lexer returns byte ranges; CodeMirror wants character
+// positions. Marks are replaced wholesale after each edit, debounced.
+let marks = [];
+let highlightTimer = null;
+function byteToCharIndex(text) {
+  // Identity for ASCII, which is nearly every spec.
+  if (!/[^\x00-\x7f]/.test(text)) return (b) => b;
+  const map = [];
+  let byte = 0;
+  for (let i = 0; i < text.length; i++) {
+    map[byte] = i;
+    const code = text.codePointAt(i);
+    const len = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    byte += len;
+    if (code >= 0x10000) i++;
+  }
+  map[byte] = text.length;
+  return (b) => map[b] ?? text.length;
+}
+function rehighlight() {
+  const text = editor.getValue();
+  const toChar = byteToCharIndex(text);
+  editor.operation(() => {
+    for (const m of marks) m.clear();
+    marks = [];
+    for (const [start, end, kind] of JSON.parse(highlight(text))) {
+      marks.push(editor.markText(editor.posFromIndex(toChar(start)), editor.posFromIndex(toChar(end)), { className: "tok-" + kind }));
+    }
+  });
+}
+editor.on("change", () => {
+  clearTimeout(highlightTimer);
+  highlightTimer = setTimeout(rehighlight, 80);
 });
 
 // ── Split divider ──────────────────────────────────────────────────────────
@@ -81,7 +116,7 @@ function loadHash() {
   if (!location.hash) return false;
   try {
     const state = JSON.parse(decodeURIComponent(location.hash.slice(1)));
-    $("preset").value = state.preset || "custom";
+    $("preset").value = state.preset || "";
     editor.setValue(state.source || "");
     $("lint").checked = !!state.lint;
     $("bytes").value = state.bytes || "";
@@ -93,47 +128,20 @@ function loadHash() {
   }
 }
 
-// ── Preset mode ──────────────────────────────────────────────────────────
-function isPreset() {
-  return $("preset").value !== "custom";
-}
-// Something to decode as soon as a preset is chosen, so the listing is
-// never empty on arrival.
-const DEFAULT_BYTES = {
-  custom: "16203b4450fa00",
-  x64: "4889d84801c8c3",
-  x86: "89d801c8c3",
-  aarch64: "000080d2c0035fd6",
-  riscv: "1305100067800000",
-};
-function fillDefaultBytes(force) {
-  const input = $("bytes");
-  if (force || !input.value.trim()) input.value = DEFAULT_BYTES[$("preset").value] || "";
-}
-function updatePresetMode() {
-  const note = $("preset-note");
-  if (isPreset()) {
-    editor.setOption("readOnly", true);
-    note.hidden = false;
-    note.textContent =
-      `${$("preset").value} is a precompiled specification embedded in the wasm bundle; ` +
-      `its .slaspec source is a tree of #include files and cannot be shown here. ` +
-      `Switch the preset to "custom" to edit a self-contained spec instead.`;
-  } else {
-    editor.setOption("readOnly", false);
-    note.hidden = true;
-  }
+// ── Presets ───────────────────────────────────────────────────────────────
+// Each preset is a small toy ISA shipped as editable source. Picking one
+// loads its spec, bytes and address; editing afterwards is just editing.
+let PRESETS = [];
+function loadPreset(name) {
+  const preset = PRESETS.find((p) => p.name === name) || PRESETS[0];
+  if (!preset) return;
+  editor.setValue(preset.source);
+  $("bytes").value = preset.bytes;
+  $("address").value = preset.address;
 }
 $("preset").onchange = () => {
-  updatePresetMode();
-  fillDefaultBytes(true);
-  if (isPreset()) {
-    showSpecStats(JSON.parse(preset_stats($("preset").value)));
-    runDecode();
-  } else {
-    editor.setValue(sample_source());
-    runCompile();
-  }
+  loadPreset($("preset").value);
+  runCompile();
   saveHash();
 };
 
@@ -208,7 +216,7 @@ let lastCompile = null;
 let decodeTimer = null;
 
 function runCompile() {
-  if (!ready || isPreset()) return;
+  if (!ready) return;
   const opts = {
     source: editor.getValue(),
     defines: {},
@@ -257,34 +265,22 @@ function runDecode() {
     address: $("address").value.trim() || "0x0",
     pcode: $("pcode").checked,
   };
-  let output;
-  if (isPreset()) {
-    output = JSON.parse(decode_preset(JSON.stringify({ ...opts, arch: $("preset").value })));
-  } else {
-    if (!lastCompile || !lastCompile.ok) {
-      showListing({ error: "compile the spec first" });
-      return;
-    }
-    output = JSON.parse(decode(JSON.stringify(opts)));
+  if (!lastCompile || !lastCompile.ok) {
+    showListing({ error: "compile the spec first" });
+    return;
   }
+  const output = JSON.parse(decode(JSON.stringify(opts)));
   showListing(output);
-  if (!isPreset()) {
-    $("json").textContent = JSON.stringify(output, null, 2);
-  }
+  $("json").textContent = JSON.stringify(output, null, 2);
   if (output.error) {
     status.className = "status error";
     status.textContent = output.error;
     return;
   }
-  if (!isPreset()) {
-    status.className = "status ok";
-    status.textContent =
-      `ok: ${lastCompile.registers} registers, ${lastCompile.tables} tables` +
-      ` · decoded ${output.instructions.length} instruction(s)`;
-  } else {
-    status.className = "status ok";
-    status.textContent = `decoded ${output.instructions.length} instruction(s) with ${output.arch}`;
-  }
+  status.className = "status ok";
+  status.textContent =
+    `ok: ${lastCompile.registers} registers, ${lastCompile.tables} tables` +
+    ` · decoded ${output.instructions.length} instruction(s)`;
   saveHash();
 }
 
@@ -305,28 +301,22 @@ document.addEventListener("keydown", (e) => {
 new ResizeObserver(() => editor.refresh()).observe(document.querySelector(".pane.input"));
 
 // ── Boot ───────────────────────────────────────────────────────────────
-let cachedSample = null;
-function sample_source() {
-  if (cachedSample === null) cachedSample = sample();
-  return cachedSample;
-}
-
 init().then(() => {
   ready = true;
-  if (!loadHash()) {
-    editor.setValue(sample());
+  PRESETS = JSON.parse(presets());
+  const select = $("preset");
+  for (const p of PRESETS) {
+    const option = document.createElement("option");
+    option.value = p.name;
+    option.textContent = p.name;
+    select.append(option);
   }
-  // A shared link may carry a preset and bytes but no source; custom mode
-  // still needs a spec to compile.
-  if (!isPreset() && !editor.getValue().trim()) editor.setValue(sample());
-  updatePresetMode();
-  fillDefaultBytes(false);
-  if (isPreset()) {
-    showSpecStats(JSON.parse(preset_stats($("preset").value)));
-    runDecode();
-  } else {
-    runCompile();
+  if (!loadHash() || !editor.getValue().trim()) {
+    // Nothing shared: open on the first toy.
+    select.value = PRESETS[0].name;
+    loadPreset(PRESETS[0].name);
   }
+  runCompile();
 }).catch((e) => {
   status.className = "status error";
   status.textContent = "failed to load wasm: " + e;

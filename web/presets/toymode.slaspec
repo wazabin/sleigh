@@ -1,0 +1,57 @@
+# Toy ISA with a mode bit: a context register selects whether arithmetic
+# is 8-bit or 16-bit, and one instruction flips the mode for everything
+# that follows. Shows context fields, globalset, and `with` blocks.
+
+define endian=little;
+define alignment=1;
+
+define space ram type=ram_space size=2 default;
+define space register type=register_space size=1;
+
+define register offset=0  size=2 [ ax bx cx dx pc ];
+define register offset=0  size=1 [ al ah bl bh cl ch dl dh ];
+define register offset=16 size=4 [ ctxreg ];
+
+define context ctxreg
+  wide = (0,0)
+;
+
+define token opcode (8)
+  op  = (4,7)
+  rd  = (2,3)
+  rs  = (0,1)
+;
+define token tok8  (8)  imm8  = (0,7) signed;
+define token tok16 (16) imm16 = (0,15);
+
+attach variables [ rd rs ] [ ax bx cx dx ];
+
+# Narrow forms read the low byte of each register.
+rd8: al is rd=0 { export al; }
+rd8: bl is rd=1 { export bl; }
+rd8: cl is rd=2 { export cl; }
+rd8: dl is rd=3 { export dl; }
+rs8: al is rs=0 { export al; }
+rs8: bl is rs=1 { export bl; }
+rs8: cl is rs=2 { export cl; }
+rs8: dl is rs=3 { export dl; }
+
+:NOP is op=0x0 & rd=0 & rs=0 { }
+
+# WIDE / NARROW switch the mode for every following instruction.
+:WIDE   is op=0x0 & rd=1 & rs=0 [ wide=1; globalset(inst_next, wide); ] { }
+:NARROW is op=0x0 & rd=2 & rs=0 [ wide=0; globalset(inst_next, wide); ] { }
+
+with : wide=0 {
+  :MOV rd8, rs8   is op=0x1 & rd8 & rs8        { rd8 = rs8; }
+  :ADD rd8, rs8   is op=0x2 & rd8 & rs8        { rd8 = rd8 + rs8; }
+  :LDI rd8, imm8  is op=0x3 & rd8 & rs=0; imm8 { rd8 = imm8:1; }
+}
+
+with : wide=1 {
+  :MOV rd, rs     is op=0x1 & rd & rs           { rd = rs; }
+  :ADD rd, rs     is op=0x2 & rd & rs           { rd = rd + rs; }
+  :LDI rd, imm16  is op=0x3 & rd & rs=0; imm16  { rd = imm16; }
+}
+
+:JMP imm16 is op=0x4 & rd=0 & rs=0; imm16 { goto [imm16]; }
