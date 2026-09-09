@@ -1,0 +1,38 @@
+# Toy 8-bit ISA: a minimal, self-contained sample for the playground.
+# Four registers, an 8-bit opcode token, load/store, arithmetic and a branch.
+
+define endian=little;
+define alignment=1;
+
+define space ram type=ram_space size=2 default;
+define space register type=register_space size=1;
+
+define register offset=0 size=1 [ r0 r1 r2 r3 pc ];
+
+define token opcode (8)
+  op      = (4,7)
+  rd      = (2,3)
+  rs      = (0,1)
+;
+
+define token imm8 (8)
+  imm     = (0,7) signed
+;
+
+attach variables [ rd rs ] [ r0 r1 r2 r3 ];
+
+:NOP        is op=0x0 & rd=0 & rs=0           { }
+
+:MOV rd, rs is op=0x1 & rd & rs               { rd = rs; }
+
+:ADD rd, rs is op=0x2 & rd & rs               { rd = rd + rs; }
+
+:LD  rd, [rs] is op=0x3 & rd & rs             { rd = *:1 rs; }
+
+:ST  [rd], rs is op=0x4 & rd & rs             { *:1 rd = rs; }
+
+:BEQ imm      is op=0x5 & rd=0 & rs=0; imm    {
+  if (r0 != r1) goto <skip>;
+  goto [inst_next + imm];
+  <skip>
+}

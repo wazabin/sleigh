@@ -33,6 +33,8 @@ pub mod annotate;
 pub mod bitrange;
 pub mod compile;
 pub mod diagnostic;
+/// Tolerant lexical classification of SLEIGH text, for highlighting.
+pub mod highlight;
 /// Read-only views over the compiled specification's *symbolic* structures.
 ///
 /// **Unstable.** Behind the `unstable-introspect` feature and exempt from this
