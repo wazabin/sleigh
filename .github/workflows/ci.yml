@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the open_sleigh submodule
+        run: |
+          git -c url.https://github.com/.insteadOf=git@github.com: \
+            submodule update --init --recursive --depth=1
       - name: Check out local dependencies
         run: |
           git clone --depth=1 "https://github.com/${JSTD_REPOSITORY}.git" \
@@ -40,6 +44,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the open_sleigh submodule
+        run: |
+          git -c url.https://github.com/.insteadOf=git@github.com: \
+            submodule update --init --recursive --depth=1
       - name: Check out local dependencies
         run: |
           git clone --depth=1 "https://github.com/${JSTD_REPOSITORY}.git" \
