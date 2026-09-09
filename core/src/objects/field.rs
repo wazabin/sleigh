@@ -184,7 +184,10 @@ impl Field {
         field_tables: &'a FieldTables,
         value: u64,
     ) -> Option<FieldValue<'a>> {
-        let index = usize::try_from(value).ok()?;
+        // Only attached tables index by the value. Converting up front would
+        // reject a sign-extended negative integer on 32-bit targets such as
+        // wasm32, where it does not fit a `usize`.
+        let index = || usize::try_from(value).ok();
 
         Some(match self.ty {
             // A `signed` field's value was sign-extended when it was read out
@@ -196,15 +199,15 @@ impl Field {
             // `attach values` may bind negative numbers, stored here in
             // two's complement. Ghidra reads an attached value as signed.
             FieldType::Values(table_id) => {
-                FieldValue::Int((*field_tables.values[table_id].get(index)?)? as i64)
+                FieldValue::Int((*field_tables.values[table_id].get(index()?)?)? as i64)
             }
 
             FieldType::Registers(table_id) => {
-                FieldValue::Register((*field_tables.registers[table_id].get(index)?)?)
+                FieldValue::Register((*field_tables.registers[table_id].get(index()?)?)?)
             }
 
             FieldType::String(table_id) => {
-                FieldValue::String(field_tables.names[table_id].get(index)?.as_deref()?)
+                FieldValue::String(field_tables.names[table_id].get(index()?)?.as_deref()?)
             }
         })
     }
