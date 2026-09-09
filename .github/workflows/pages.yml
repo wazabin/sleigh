@@ -1,0 +1,59 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", "core/**", "precompile/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  JSTD_REPOSITORY: ${{ vars.JSTD_REPOSITORY || format('{0}/jstd', github.repository_owner) }}
+  PCODE_TYPES_REPOSITORY: ${{ vars.PCODE_TYPES_REPOSITORY || format('{0}/pcode', github.repository_owner) }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Check out local dependencies
+        run: |
+          git clone --depth=1 "https://github.com/${JSTD_REPOSITORY}.git" \
+            "$GITHUB_WORKSPACE/../wazabin-jstd"
+          git clone --depth=1 "https://github.com/${PCODE_TYPES_REPOSITORY}.git" \
+            "$GITHUB_WORKSPACE/../wazabin-pcode"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: Build the playground
+        run: |
+          wasm-pack build web --target web --release --out-dir pkg --no-typescript
+          mkdir -p dist/pkg
+          cp web/index.html web/app.js web/app.css web/wazabin.css dist/
+          cp web/pkg/sleigh_web.js web/pkg/sleigh_web_bg.wasm dist/pkg/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

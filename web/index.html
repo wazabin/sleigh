@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sleigh playground</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+  <link rel="stylesheet" href="wazabin.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="header">
+    <a class="wordmark" href="https://github.com/wazabin">wazabin / <b>sleigh</b></a>
+    <nav>
+      <a href="https://github.com/wazabin/sleigh">Repo</a>
+      <a href="https://crates.io/crates/wazabin-sleigh">crates.io</a>
+      <a href="https://docs.rs/wazabin-sleigh">docs.rs</a>
+      <a href="https://github.com/wazabin">Org</a>
+    </nav>
+    <button id="theme" title="Toggle theme (Ctrl+/)">◐</button>
+  </header>
+
+  <div class="toolbar">
+    <label>Preset <select id="preset">
+      <option value="custom">custom</option>
+      <option value="x64">x64</option>
+      <option value="x86">x86</option>
+      <option value="aarch64">aarch64</option>
+      <option value="riscv">riscv</option>
+    </select></label>
+    <label><input type="checkbox" id="lint"> Lint</label>
+    <button id="compile" class="primary" title="Compile (Ctrl+Enter)">Compile</button>
+    <span class="spacer"></span>
+    <span class="time" id="time"></span>
+  </div>
+
+  <div class="split">
+    <section class="pane input">
+      <div class="preset-note" id="preset-note" hidden></div>
+      <textarea id="source"></textarea>
+      <div class="diagnostics" id="diagnostics"></div>
+    </section>
+    <div class="divider" id="divider"></div>
+    <section class="pane result">
+      <div class="strip">
+        <label>Bytes <input type="text" id="bytes" placeholder="4889d8" size="20"></label>
+        <label>Address <input type="text" id="address" value="0x0" size="10"></label>
+        <label><input type="checkbox" id="pcode"> p-code</label>
+      </div>
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="listing">Listing</button>
+        <button role="tab" aria-selected="false" data-tab="spec">Spec</button>
+        <button role="tab" aria-selected="false" data-tab="json">JSON</button>
+      </div>
+      <pre class="listing" id="listing" data-tab="listing"></pre>
+      <div class="listing" id="spec" data-tab="spec" hidden></div>
+      <pre class="listing" id="json" data-tab="json" hidden></pre>
+    </section>
+  </div>
+
+  <footer class="status" id="status">loading…</footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+/* Page-specific additions to wazabin.css. */
+.strip { display: flex; align-items: center; gap: 8px; flex: none; height: 36px; padding: 0 12px; background: var(--chrome); border-bottom: 1px solid var(--border); }
+.preset-note { flex: none; padding: 8px 12px; color: var(--muted); border-bottom: 1px solid var(--border); background: var(--chrome); }
+.preset-note:empty, .preset-note[hidden] { display: none; }
+.pane.input { display: flex; flex-direction: column; }
+.pane.result { display: flex; flex-direction: column; }
+.listing.stale { opacity: .5; }
+.spec dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
+.spec dt { color: var(--muted); }
+.spec dd { margin: 0; }
+.spec h3 { font: 600 12px var(--ui); color: var(--muted); margin: 12px 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+.spec h3:first-child { margin-top: 0; }
+.insn { color: var(--fg); }
+.insn .addr { color: var(--muted); }
+.insn .bytes { color: var(--muted); }
+.pcode-line { color: var(--accent); padding-left: 2ch; }
