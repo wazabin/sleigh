@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     builder::SpecBuilder,
+    constraint::{BitPatternAstNode, ConstraintAst},
     constructor::{DisplayElement, PatternOrConstraint},
     diagnostic::{Diagnostic, DiagnosticCode, DiagnosticLabel, Severity},
     objects::field::{FIELD_INST_NEXT, FIELD_INST_START, FieldId, FieldParent},
@@ -11,6 +12,46 @@ use crate::{
 };
 
 const EXPLOSION_THRESHOLD: usize = 64;
+
+/// Names of every field read by the bit patterns of `items`, including the
+/// constraints `with` blocks conjoin onto their constructors.
+///
+/// Concretization compiles constraints down to bit masks, so once the
+/// builder has run there is no record of which fields a pattern tested.
+/// The AST still has them.
+fn collect_constrained_fields<'a>(items: &'a [SleighItem], out: &mut HashSet<&'a str>) {
+    for item in items {
+        match item {
+            SleighItem::Constructor(d) => constrained_fields(&d.constraint, out),
+            SleighItem::WithBlock(d) => {
+                constrained_fields(&d.constraint, out);
+                collect_constrained_fields(&d.items, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn constrained_fields<'a>(ast: &'a ConstraintAst, out: &mut HashSet<&'a str>) {
+    match &ast.value {
+        BitPatternAstNode::Ident(name) => {
+            out.insert(name);
+        }
+        BitPatternAstNode::Constraint { lhs, rhs, .. } => {
+            out.insert(lhs);
+            constrained_fields(rhs, out);
+        }
+        BitPatternAstNode::ValueBinOp { lhs, rhs, .. }
+        | BitPatternAstNode::BinOp { lhs, rhs, .. } => {
+            constrained_fields(lhs, out);
+            constrained_fields(rhs, out);
+        }
+        BitPatternAstNode::RElipsis(inner) | BitPatternAstNode::LElipsis(inner) => {
+            constrained_fields(inner, out);
+        }
+        BitPatternAstNode::Int(_) => {}
+    }
+}
 
 fn is_builtin_field(fid: FieldId) -> bool {
     fid == FIELD_INST_START || fid == FIELD_INST_NEXT
@@ -43,8 +84,15 @@ pub(crate) fn run_lints(builder: &SpecBuilder, file: &SleighFile) -> Vec<Diagnos
     let mut field_def_spans: HashMap<Box<str>, Span> = HashMap::new();
     collect_field_def_spans(&file.items, &mut field_def_spans);
 
-    // Field usage tracking
-    let mut referenced_fields: HashSet<FieldId> = HashSet::new();
+    // Field usage tracking. A field tested by a pattern is used, even if
+    // nothing displays or exports it: `op` is what selects the constructor.
+    let mut constrained: HashSet<&str> = HashSet::new();
+    collect_constrained_fields(&file.items, &mut constrained);
+    let mut referenced_fields: HashSet<FieldId> = constrained
+        .iter()
+        .filter_map(|name| builder.try_get_field(name))
+        .map(|field| field.id)
+        .collect();
     // context field writes: field_id -> span of first writing constructor
     let mut ctx_writes: HashMap<FieldId, Span> = HashMap::new();
     // context fields read via operands, display, or action expressions
@@ -254,7 +302,7 @@ pub(crate) fn run_lints(builder: &SpecBuilder, file: &SleighFile) -> Vec<Diagnos
                 severity: Severity::Warning,
                 code: DiagnosticCode::Lint("unused-field".into()),
                 message: format!(
-                    "field `{}` is never used in any constructor's operands, display, or actions",
+                    "field `{}` is never used in any constructor's pattern, operands, display, or actions",
                     f.name
                 ),
                 primary: span,

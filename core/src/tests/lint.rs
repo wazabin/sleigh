@@ -35,6 +35,18 @@ fn lint_codes(src: &str) -> Vec<String> {
         .collect()
 }
 
+/// Messages of every lint diagnostic with `code`.
+fn lint_messages(src: &str, code: &str) -> Vec<String> {
+    let mut db = SourceDb::new();
+    let root = db.add_file("test.sla", src);
+    analyze(&mut db, root)
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(&d.code, DiagnosticCode::Lint(c) if c == code))
+        .map(|d| d.message.clone())
+        .collect()
+}
+
 fn has_lint(src: &str, code: &str) -> bool {
     lint_codes(src).iter().any(|c| c == code)
 }
@@ -296,16 +308,37 @@ define token instr(8) op=(0,7);
 
 #[test]
 fn unused_field_fires() {
-    // 'unused' is never referenced in any constructor's operands, display, or actions.
-    // Note: fields used only in pattern constraints (like the 'op' field here) are
-    // also flagged because constraint-only uses are not tracked post-concretize.
+    // 'unused' is never referenced anywhere; 'op' is only tested by the
+    // pattern, which is a use.
     let src = format!(
         "{PREAMBLE}
 define token instr(8) op=(0,3) unused=(4,7);
 :insn is op=0 {{ }}
 "
     );
-    assert!(has_lint(&src, "unused-field"), "expected unused-field");
+    let messages = lint_messages(&src, "unused-field");
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(messages[0].contains("`unused`"), "{messages:?}");
+}
+
+#[test]
+fn unused_field_no_fire_for_constraint_only_uses() {
+    // Every kind of pattern reference counts: a comparison, a bare name, an
+    // arithmetic constraint value, and a `with` block's own constraint.
+    let src = format!(
+        "{PREAMBLE}
+define token instr(8) op=(0,3) mode=(4,5) sel=(6,6) hi=(7,7);
+with : mode=1 {{
+  :a is op=0 & sel {{ }}
+  :b is op=(hi+1) {{ }}
+}}
+"
+    );
+    assert!(
+        no_lint(&src, "unused-field"),
+        "{:?}",
+        lint_messages(&src, "unused-field")
+    );
 }
 
 #[test]
