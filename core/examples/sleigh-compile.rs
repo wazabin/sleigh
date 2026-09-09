@@ -53,7 +53,7 @@ struct Opts {
     /// After compiling, decode these bytes once to prove the spec works
     #[arg(long)]
     decode: Option<String>,
-    /// Run the crate's lint pass, if it is available for external use
+    /// Run the crate's lint pass and include its diagnostics in the output
     #[arg(long)]
     lint: bool,
 }
@@ -221,13 +221,18 @@ fn run(opts: &Opts) -> Result<Output, String> {
         .map_err(|e| format!("reading '{}' failed: {e}", spec_path.display()))?;
 
     let start = Instant::now();
-    let compiled = Compiler::new(&mut sources)
-        .with_options(CompileOptions { defines })
-        .compile(root);
+    let compiler = Compiler::new(&mut sources).with_options(CompileOptions { defines });
+    let compiled = if opts.lint {
+        compiler
+            .compile_with_lints(root)
+            .map(|(spec, lints)| (spec, lints))
+    } else {
+        compiler.compile(root).map(|spec| (spec, Vec::new()))
+    };
     let compile_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    let mut spec = match compiled {
-        Ok(spec) => spec,
+    let (mut spec, lint_diagnostics) = match compiled {
+        Ok(result) => result,
         Err(error) => {
             let diagnostics = error
                 .diagnostics()
@@ -253,10 +258,6 @@ fn run(opts: &Opts) -> Result<Output, String> {
             });
         }
     };
-
-    if opts.lint {
-        eprintln!("note: --lint requested, but the crate's lint pass is not a public API; skipping");
-    }
 
     let mut context = spec.new_context();
     let applied_context = apply_context(&mut spec, &mut context, &config_context)?;
@@ -302,10 +303,19 @@ fn run(opts: &Opts) -> Result<Output, String> {
         None => None,
     };
 
+    let diagnostics = lint_diagnostics
+        .iter()
+        .map(|d| DiagnosticOut {
+            severity: format!("{:?}", d.severity),
+            message: d.message.clone(),
+            location: d.render(&sources),
+        })
+        .collect();
+
     Ok(Output {
         spec: spec_path_str,
         ok: true,
-        diagnostics: Vec::new(),
+        diagnostics,
         registers,
         tables,
         spaces,
@@ -374,6 +384,12 @@ fn main() {
     }
     if let Some(decoded) = &output.decoded {
         println!("decoded:        [{}] {}", decoded.address, decoded.text);
+    }
+    if !output.diagnostics.is_empty() {
+        println!("lints:");
+        for d in &output.diagnostics {
+            println!("  {}", d.location);
+        }
     }
 }
 
