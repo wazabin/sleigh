@@ -387,6 +387,42 @@ impl<'a> MacroExpander<'a> {
         let ty = match stmt.ty {
             AstNode::Assignment { lhs, size, rhs } => {
                 let (mut prefix, rhs) = self.expand_expr(rhs, env, remap_base)?;
+                // A parameter bound to a bit range (`shuffle_4(XmmReg1[0,32], ...)`)
+                // or to a memory load is an lvalue in the caller: assigning to
+                // it must write that lane or that memory, not a fresh local.
+                if let Ident::Named(id) = &lhs {
+                    match env.get(id) {
+                        Some(Expression {
+                            ty: ExpressionTy::Range(range),
+                            ..
+                        }) => {
+                            prefix.push(Ast {
+                                ty: AstNode::RangeAssignment {
+                                    lhs: range.clone(),
+                                    size,
+                                    rhs,
+                                },
+                                span: (0, 0),
+                            });
+                            return Ok(prefix);
+                        }
+                        Some(Expression {
+                            ty: ExpressionTy::Load(load),
+                            ..
+                        }) => {
+                            prefix.push(Ast {
+                                ty: AstNode::LoadAssignment {
+                                    lhs: load.clone(),
+                                    size,
+                                    rhs,
+                                },
+                                span: (0, 0),
+                            });
+                            return Ok(prefix);
+                        }
+                        _ => {}
+                    }
+                }
                 let lhs = self.substitute_lhs(lhs, env, remap_base);
                 prefix.push(Ast {
                     ty: AstNode::Assignment { lhs, size, rhs },

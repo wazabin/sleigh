@@ -14,6 +14,7 @@ const SEMANTIC_LOAD_STORE_FIXTURE: &str = include_str!("fixtures/semantics/load_
 const SEMANTIC_BRANCH_FIXTURE: &str = include_str!("fixtures/semantics/branching.sla");
 const SEMANTIC_BUILD_EXPORT_FIXTURE: &str = include_str!("fixtures/semantics/build_export.sla");
 const SEMANTIC_USEROP_MACRO_FIXTURE: &str = include_str!("fixtures/semantics/userop_macro.sla");
+const SEMANTIC_MACRO_LVALUE_FIXTURE: &str = include_str!("fixtures/semantics/macro_lvalue.sla");
 
 fn pcode_ast(src: &'static str, bytes: &[u8]) -> PcodeAst {
     let sources = Box::leak(Box::new(SourceDb::new()));
@@ -880,6 +881,34 @@ fn macro_use() {
             rhs,
             ..
         } if *dst == reg(1) && is_const_expr(rhs, 1, Some(4))
+    ));
+}
+
+/// A macro parameter bound to a bit range or a memory load is an lvalue in
+/// the caller: `setone(reg[8,8])` must write that lane and `setone(*:1 reg)`
+/// that byte, not a fresh macro-local that nothing reads. x86 `PSHUFD`,
+/// `SHUFPS`, the `PMIN`/`PMAX` and `PSLL`/`PSRL` XMM forms all pass lanes as
+/// macro outputs and silently produced nothing before this was fixed.
+#[test]
+fn macro_output_bound_to_a_range_or_load_writes_through() {
+    let ast = pcode_ast(SEMANTIC_MACRO_LVALUE_FIXTURE, &[0x13]);
+    println!("{:#?}", ast.statements);
+    assert_eq!(ast.statements.len(), 1);
+    assert!(matches!(
+        &ast.statements[0].ty,
+        PcodeStatementKind::RangeAssignment { lhs, rhs, .. }
+            if matches!(&lhs.value.ty, PcodeExprKind::Ident(PcodeIdent::Register(dst)) if *dst == reg(1))
+                && is_const_expr(rhs, 1, Some(1))
+    ));
+
+    let ast = pcode_ast(SEMANTIC_MACRO_LVALUE_FIXTURE, &[0x14]);
+    println!("{:#?}", ast.statements);
+    assert_eq!(ast.statements.len(), 1);
+    assert!(matches!(
+        &ast.statements[0].ty,
+        PcodeStatementKind::LoadAssignment { lhs, rhs, .. }
+            if matches!(&lhs.ptr.ty, PcodeExprKind::Ident(PcodeIdent::Register(dst)) if *dst == reg(1))
+                && is_const_expr(rhs, 1, Some(1))
     ));
 }
 
