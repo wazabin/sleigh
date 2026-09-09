@@ -25,7 +25,7 @@ use std::{
 #[command(name = "sleigh-compile", version)]
 struct Cli {
     /// All options as one JSON object; keys are the long flag names
-    #[arg(long, value_name = "JSON", conflicts_with_all = ["spec", "define", "context", "no_config", "decode", "lint"])]
+    #[arg(long, value_name = "JSON", conflicts_with_all = ["spec", "define", "context", "no_config", "decode", "address", "lint"])]
     args: Option<String>,
     /// Emit JSON instead of text
     #[arg(long)]
@@ -53,6 +53,10 @@ struct Opts {
     /// After compiling, decode these bytes once to prove the spec works
     #[arg(long)]
     decode: Option<String>,
+    /// Address to decode at (decimal or 0x-prefixed)
+    #[arg(long, default_value = "0")]
+    #[serde(default = "default_address")]
+    address: String,
     /// Run the crate's lint pass and include its diagnostics in the output
     #[arg(long)]
     lint: bool,
@@ -103,6 +107,22 @@ struct Decoded {
     text: String,
 }
 
+fn parse_int(what: &str, value: &str) -> Result<u64, String> {
+    let value = value.trim();
+    match value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => value.parse(),
+    }
+    .map_err(|_| format!("invalid {what} '{value}'"))
+}
+
+fn default_address() -> String {
+    "0".to_string()
+}
+
 fn parse_hex(value: &str) -> Result<Vec<u8>, String> {
     let value: String = value.chars().filter(|c| !c.is_whitespace()).collect();
     if value.is_empty() || value.len() % 2 != 0 {
@@ -126,7 +146,10 @@ fn parse_kv(what: &str, entry: &str) -> Result<(String, String), String> {
 
 fn parse_context_value(what: &str, value: &str) -> Result<u64, String> {
     let value = value.trim();
-    match value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+    match value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
         Some(hex) => u64::from_str_radix(hex, 16),
         None => value.parse(),
     }
@@ -181,7 +204,10 @@ fn apply_context(
 }
 
 fn run(opts: &Opts) -> Result<Output, String> {
-    let spec_path_str = opts.spec.clone().ok_or_else(|| "give a spec path".to_string())?;
+    let spec_path_str = opts
+        .spec
+        .clone()
+        .ok_or_else(|| "give a spec path".to_string())?;
     let spec_path = Path::new(&spec_path_str);
 
     let mut cli_defines = HashMap::new();
@@ -192,7 +218,10 @@ fn run(opts: &Opts) -> Result<Output, String> {
     let mut cli_context = Vec::new();
     for entry in &opts.context {
         let (k, v) = parse_kv("--context", entry)?;
-        cli_context.push((k.clone(), parse_context_value(&format!("--context {k}"), &v)?));
+        cli_context.push((
+            k.clone(),
+            parse_context_value(&format!("--context {k}"), &v)?,
+        ));
     }
 
     let arch = if opts.no_config {
@@ -223,9 +252,7 @@ fn run(opts: &Opts) -> Result<Output, String> {
     let start = Instant::now();
     let compiler = Compiler::new(&mut sources).with_options(CompileOptions { defines });
     let compiled = if opts.lint {
-        compiler
-            .compile_with_lints(root)
-            .map(|(spec, lints)| (spec, lints))
+        compiler.compile_with_lints(root)
     } else {
         compiler.compile(root).map(|spec| (spec, Vec::new()))
     };
@@ -291,12 +318,13 @@ fn run(opts: &Opts) -> Result<Output, String> {
     let decoded = match &opts.decode {
         Some(hex) => {
             let bytes = parse_hex(hex)?;
+            let address = parse_int("address", &opts.address)?;
             let decoder = Decoder::new(&spec);
             let instruction = decoder
-                .decode_one(0, &bytes, &context)
+                .decode_one(address, &bytes, &context)
                 .map_err(|e| format!("no instruction decodes from '{hex}': {e:?}"))?;
             Some(Decoded {
-                address: "0x0".to_string(),
+                address: format!("{address:#x}"),
                 text: instruction.to_string(),
             })
         }
