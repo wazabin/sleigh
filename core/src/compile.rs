@@ -75,6 +75,39 @@ impl<'src> Compiler<'src> {
     /// Compiling is the expensive step — hundreds of milliseconds for a real
     /// processor — so do it once and keep the [`CompiledSpec`].
     pub fn compile(self, root: FileId) -> Result<CompiledSpec, CompileError> {
+        self.compile_inner(root, false).map(|(spec, _)| spec)
+    }
+
+    /// Compiles `root` into a [`CompiledSpec`], additionally running the
+    /// crate's lint pass over the resolved specification.
+    ///
+    /// The lints look for issues `compile` itself does not treat as errors —
+    /// things like unused fields or context writes that are never read —
+    /// using the same [`SpecBuilder`] and parsed AST that `compile` builds
+    /// internally but does not otherwise expose. Use this instead of
+    /// `compile` when you want that extra diagnostic pass; the cost is one
+    /// additional traversal of the specification's constructors.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Compiler::compile`]: a [`CompileError`] if the specification
+    /// cannot be preprocessed, parsed, resolved or concretized. Lints only
+    /// run once concretization succeeds, so a compile failure never carries
+    /// lint diagnostics.
+    pub fn compile_with_lints(
+        self,
+        root: FileId,
+    ) -> Result<(CompiledSpec, Vec<Diagnostic>), CompileError> {
+        self.compile_inner(root, true)
+    }
+
+    /// Shared pipeline behind [`compile`](Self::compile) and
+    /// [`compile_with_lints`](Self::compile_with_lints).
+    fn compile_inner(
+        self,
+        root: FileId,
+        lint: bool,
+    ) -> Result<(CompiledSpec, Vec<Diagnostic>), CompileError> {
         let options = PreprocessOptions {
             defines: self.options.defines,
         };
@@ -88,6 +121,12 @@ impl<'src> Compiler<'src> {
 
         builder.concretize().map_err(|e| CompileError::one(*e))?;
 
+        let lints = if lint {
+            crate::lint::run_lints(&builder, &file)
+        } else {
+            Vec::new()
+        };
+
         if let Err(error) = builder.finalize_pcode() {
             let location = error
                 .span
@@ -99,6 +138,6 @@ impl<'src> Compiler<'src> {
         }
 
         let spec = Spec::from_builder(builder);
-        Ok(CompiledSpec::from_spec(spec))
+        Ok((CompiledSpec::from_spec(spec), lints))
     }
 }
