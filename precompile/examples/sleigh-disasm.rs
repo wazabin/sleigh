@@ -86,7 +86,10 @@ fn spec_for(arch: &str) -> Result<&'static CompiledSpec, String> {
 
 fn parse_int(what: &str, value: &str) -> Result<u64, String> {
     let value = value.trim();
-    match value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+    match value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
         Some(hex) => u64::from_str_radix(hex, 16),
         None => value.parse(),
     }
@@ -150,13 +153,19 @@ fn run(opts: &Opts) -> Result<Output, String> {
         };
         instructions.push(Insn {
             address: format!("{at:#x}"),
-            bytes: data[cursor..cursor + len].iter().map(|b| format!("{b:02x}")).collect(),
+            bytes: data[cursor..cursor + len]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect(),
             text: instruction.to_string(),
             pcode,
         });
         cursor += len;
     }
-    Ok(Output { arch: opts.arch.clone(), instructions })
+    Ok(Output {
+        arch: opts.arch.clone(),
+        instructions,
+    })
 }
 
 fn main() {
