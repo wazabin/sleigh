@@ -491,6 +491,21 @@ pub struct ConstructorDef {
     pub leading_trivia: Vec<TriviaToken>,
 }
 
+impl ConstructorDef {
+    /// Byte spans of the semantic body's top-level statements, in the prepared
+    /// source, in source order.
+    ///
+    /// A formatter uses these to lay a body out without re-lexing it; the
+    /// compiler uses the same spans to point diagnostics at one statement.
+    pub fn statement_spans(&self) -> Vec<(usize, usize)> {
+        self.pcode
+            .body
+            .iter()
+            .map(|statement| statement.span)
+            .collect()
+    }
+}
+
 // ── Macros ────────────────────────────────────────────────────────────────────
 
 /// `macro addflags(op1, op2) { ... }` — a named, inlined block of p-code.

@@ -192,3 +192,87 @@ fn fixture_include_cycle() {
     // compile and format fail consistently.
     check_fixture(&fixtures_dir().join("include_cycle/root.sla"));
 }
+
+#[test]
+fn statement_lines_breaks_an_inline_body() {
+    use crate::rules::StatementLines;
+    let mut sources = SourceDb::new();
+    let root = sources.add_file(
+        "spec.slaspec",
+        "define endian=little;\n\
+         define space ram type=ram_space size=4 default;\n\
+         define space register type=register_space size=4;\n\
+         define register offset=0 size=4 [ r0 r1 ];\n\
+         define token instr(8) op=(0,7);\n\
+         :add r0, r1 is op=1 { local t:4 = r1;  # keep\n r0 = r0 + t; }\n",
+    );
+    let formatter = Formatter::with_rules(vec![Box::new(StatementLines::default())]);
+    let result = formatter.format(&mut sources, root).expect("formats");
+    let body = &result.files[0].content;
+    assert!(
+        body.ends_with(
+            ":add r0, r1 is op=1\n{\n    local t:4 = r1;  # keep\n    r0 = r0 + t;\n}\n"
+        ),
+        "unexpected layout:\n{body}"
+    );
+}
+
+#[test]
+fn statement_lines_is_idempotent_and_keeps_laid_out_bodies() {
+    use crate::rules::StatementLines;
+    let prelude = "define endian=little;\n\
+                   define space ram type=ram_space size=4 default;\n\
+                   define space register type=register_space size=4;\n\
+                   define register offset=0 size=4 [ r0 r1 ];\n\
+                   define token instr(8) op=(0,7);\n";
+    let laid_out = format!("{prelude}:add r0, r1 is op=1\n{{\n    r0 = r0 + r1;\n}}\n");
+    let mut sources = SourceDb::new();
+    let root = sources.add_file("spec.slaspec", laid_out.clone());
+    let formatter = Formatter::with_rules(vec![Box::new(StatementLines::default())]);
+    let once = formatter.format(&mut sources, root).expect("formats").files[0]
+        .content
+        .clone();
+    assert_eq!(once, laid_out);
+}
+
+#[test]
+fn pcode_spacing_normalizes_statements() {
+    use crate::rules::PcodeSpacing;
+    let cases = [
+        ("local tmp =    AL -   imm8;", "local tmp = AL - imm8;"),
+        ("subflags(   AL,imm8 );", "subflags(AL, imm8);"),
+        (
+            "XmmReg1[0,32]  = XmmReg1[0,32]  f+ m[ 0,32 ];",
+            "XmmReg1[0,32] = XmmReg1[0,32] f+ m[0,32];",
+        ),
+        ("tmp:8 = sext( EAX );", "tmp:8 = sext(EAX);"),
+        ("if(!cc)goto inst_next;", "if (!cc) goto inst_next;"),
+        ("EAX = -1;", "EAX = -1;"),
+        ("goto <done>;", "goto <done>;"),
+        ("*[ram]:4 EAX = tmp;", "*[ram]:4 EAX = tmp;"),
+        ("CF = CF==0;", "CF = CF == 0;"),
+        ("tmp = a s>> b;", "tmp = a s>> b;"),
+    ];
+    let prelude = "define endian=little;\n\
+                   define space ram type=ram_space size=4 default;\n\
+                   define space register type=register_space size=4;\n\
+                   define register offset=0 size=4 [ EAX AL CF cc tmp imm8 ];\n\
+                   define token instr(8) op=(0,7);\n";
+    for (written, expected) in cases {
+        let mut sources = SourceDb::new();
+        let root = sources.add_file(
+            "spec.slaspec",
+            format!("{prelude}:op is op=1 {{ {written} }}\n"),
+        );
+        let formatter = Formatter::with_rules(vec![Box::new(PcodeSpacing)]);
+        let content = match formatter.format(&mut sources, root) {
+            Ok(result) => result.files[0].content.clone(),
+            Err(error) => panic!("{written:?} did not parse: {error}"),
+        };
+        assert!(
+            content.contains(expected),
+            "{written:?}\n  expected: {expected:?}\n  got: {:?}",
+            content.lines().last().unwrap_or_default()
+        );
+    }
+}

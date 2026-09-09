@@ -18,6 +18,23 @@ formatting the root formats every physical file it reaches, and each is
 written back to its own path. Text produced by a preprocessor macro expansion
 is never edited, because the edit would land in the wrong file.
 
+## Rules
+
+`Formatter::new()` runs the whitespace and alignment rules; the layout rules for
+semantic bodies are opt-in through `Formatter::with_rules`.
+
+| Rule | What it does | Default |
+| --- | --- | --- |
+| `TrailingWhitespace` | Strips trailing spaces and tabs. | yes |
+| `BlankLines` | Collapses runs of blank lines. | yes |
+| `AlignIs` | Aligns `is` across neighbouring constructors. | yes |
+| `StatementLines` | Puts each p-code statement of a semantic body on its own indented line, braces included. | no |
+| `PcodeSpacing` | Normalizes the spacing inside a p-code statement (`subflags(   AL,imm8 )` → `subflags(AL, imm8)`). | no |
+
+The body rules place their edits at the statement spans the parser recorded, and
+skip a statement whose span does not map back to physical source or that a human
+has already laid out across lines.
+
 If the source does not parse, nothing is formatted — a formatter that guesses
 at broken syntax destroys work.
 

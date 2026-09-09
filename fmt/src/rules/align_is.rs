@@ -101,12 +101,9 @@ fn is_info_for_constructor(
     sources: &SourceDb,
     prepared: PreparedSourceId,
 ) -> Option<IsInfo> {
-    let constructor_span = def.span;
-    let constructor_phys = sources.try_map_preprocessed_bytes(
-        prepared,
-        constructor_span.start.0,
-        constructor_span.end.0,
-    )?;
+    // `def.span` is already a physical span: the item builder mapped it. Only
+    // `is_start`, which comes straight from the parser, is a prepared offset.
+    let constructor_phys = def.span;
 
     // is_start == 0 means no display section was recorded; skip.
     if def.is_start == 0 {
