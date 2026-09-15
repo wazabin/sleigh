@@ -677,6 +677,16 @@ impl<'spec, 'bytes> Instruction<'spec, 'bytes> {
         &self,
         make_sink: impl FnOnce(&PcodePlan) -> S,
     ) -> Result<S, EmitError> {
+        self.try_pcode_ops_streamed(|plan| Ok(make_sink(plan)))
+    }
+
+    /// [`pcode_ops_streamed`](Self::pcode_ops_streamed) for a consumer whose
+    /// preparation can fail: resolving the plan's destinations may be refused
+    /// by the module it lowers into, and then nothing is streamed.
+    pub fn try_pcode_ops_streamed<S: PcodeSink, E: From<EmitError>>(
+        &self,
+        make_sink: impl FnOnce(&PcodePlan) -> Result<S, E>,
+    ) -> Result<S, E> {
         let (ast, widths) = expanded_instance(&self.spec.spec, &self.instance)?;
         let context = InstructionPcodeContext::new(&self.spec.spec);
         // Widths the specification already resolved leave the planner nothing
@@ -703,7 +713,7 @@ impl<'spec, 'bytes> Instruction<'spec, 'bytes> {
             None => plan_instruction(&ast, &context),
         }
         .map_err(|error| EmitError::new(error.to_string()))?;
-        let mut sink = make_sink(&plan);
+        let mut sink = make_sink(&plan)?;
         emit_instruction(&ast, &context, &plan, &mut sink)
             .map_err(|error| EmitError::new(error.to_string()))?;
         Ok(sink)
