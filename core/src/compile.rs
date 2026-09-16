@@ -189,9 +189,7 @@ mod tests {
 
     #[test]
     fn defines_reach_the_fingerprint_through_the_preprocessed_text() {
-        let text = format!(
-            "{TINY}\n@ifdef WIDE\n:wide r1 is op=2 {{ r1 = 0; }}\n@endif\n"
-        );
+        let text = format!("{TINY}\n@ifdef WIDE\n:wide r1 is op=2 {{ r1 = 0; }}\n@endif\n");
         let narrow = compile(&text, &[]);
         let wide = compile(&text, &[("WIDE", "1")]);
         assert_ne!(narrow.fingerprint(), wide.fingerprint());
