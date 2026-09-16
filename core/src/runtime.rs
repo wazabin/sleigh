@@ -84,12 +84,85 @@ impl PcodeLoweringContext for InstructionPcodeContext<'_> {
     }
 }
 
+/// The identity of a compiled specification's content.
+///
+/// A fingerprint is a digest of everything a compilation depends on: the
+/// specification's source text as the preprocessor delivered it to the parser
+/// — every included file, every `$(NAME)` expansion and every conditional
+/// already resolved, so the defines are in — and the version of this crate,
+/// whose compiler turned that text into the specification. Compiling the
+/// same text with the same compiler yields the same fingerprint, in any
+/// process and at any time; any change to the text or the compiler yields a
+/// different one. It is computed once, when the specification is compiled,
+/// and travels with the serialized specification, so a precompiled
+/// specification carries the fingerprint of the build that made it.
+///
+/// It is what a consumer stamps on state derived from a specification — a
+/// lifter's register map, a module built for an architecture — to establish
+/// later that another specification is *the same one*, rather than one that
+/// merely looks alike. It says nothing about decode configuration: the
+/// default processor context ([`CompiledSpec::set_context_bytes`]) is not
+/// part of it, since it changes what an instruction decodes to, not what the
+/// specification is.
+///
+/// The digest is 128-bit FNV-1a. It is not a cryptographic commitment; it
+/// distinguishes specifications that differ, which is all provenance needs.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SpecFingerprint(u128);
+
+impl SpecFingerprint {
+    const FNV_OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    const FNV_PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+
+    /// Digests the preprocessed source text a compilation consumed, under the
+    /// compiler version doing it.
+    pub(crate) fn of_compilation(preprocessed: &str) -> Self {
+        let mut hash = Self::FNV_OFFSET;
+        let mut absorb = |bytes: &[u8]| {
+            for &byte in bytes {
+                hash ^= u128::from(byte);
+                hash = hash.wrapping_mul(Self::FNV_PRIME);
+            }
+        };
+        let version = env!("CARGO_PKG_VERSION");
+        absorb(&(version.len() as u64).to_le_bytes());
+        absorb(version.as_bytes());
+        absorb(&(preprocessed.len() as u64).to_le_bytes());
+        absorb(preprocessed.as_bytes());
+        Self(hash)
+    }
+
+    /// The digest as a number, for a consumer that stores it in state of
+    /// its own.
+    pub const fn as_u128(self) -> u128 {
+        self.0
+    }
+
+    /// A fingerprint a consumer stored with [`as_u128`](Self::as_u128).
+    pub const fn from_u128(digest: u128) -> Self {
+        Self(digest)
+    }
+}
+
+impl fmt::Debug for SpecFingerprint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SpecFingerprint({self})")
+    }
+}
+
+impl fmt::Display for SpecFingerprint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:032x}", self.0)
+    }
+}
+
 /// A compiled SLEIGH specification.
 #[derive(Serialize, Deserialize)]
 pub struct CompiledSpec {
     spec: Spec,
     context_len: crate::Size,
     context_bytes: ContextBytes,
+    fingerprint: SpecFingerprint,
 }
 
 impl CompiledSpec {
@@ -123,7 +196,7 @@ impl CompiledSpec {
         })
     }
 
-    pub(crate) fn from_spec(spec: Spec) -> Self {
+    pub(crate) fn from_spec(spec: Spec, fingerprint: SpecFingerprint) -> Self {
         let context_len = spec.context_len() as crate::Size;
         Self {
             spec,
@@ -131,7 +204,13 @@ impl CompiledSpec {
             context_bytes: ContextBytes {
                 bytes: vec![0; context_len as usize],
             },
+            fingerprint,
         }
+    }
+
+    /// The identity of this specification's content; see [`SpecFingerprint`].
+    pub fn fingerprint(&self) -> SpecFingerprint {
+        self.fingerprint
     }
 
     fn context_len(&self) -> usize {

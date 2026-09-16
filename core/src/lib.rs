@@ -93,7 +93,7 @@ pub use pcode_types::{
 pub use runtime::{
     CompiledSpec, ConstructorMatch, Context, ContextBytes, ContextDatabase, ContextEffect,
     ContextError, ContextScope, DecodeError, Decoder, DelaySlotError, FieldRef, Instruction,
-    RegisterRef, SpaceRef, SymbolKind, SymbolRef, TableRef, TokenRef,
+    RegisterRef, SpaceRef, SpecFingerprint, SymbolKind, SymbolRef, TableRef, TokenRef,
 };
 pub use semantics::{
     Builtin, EmitError, InstructionInfo, LocalVarId, PcodeAst, PcodeBinaryOp, PcodeBinop,

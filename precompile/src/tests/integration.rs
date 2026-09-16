@@ -54,3 +54,12 @@ pub(crate) fn assert_ast_eq(spec: &CompiledSpec, ast: &PcodeAst, expected: &str)
         );
     }
 }
+
+#[test]
+fn each_precompiled_specification_has_its_own_fingerprint() {
+    let x64 = crate::x64::spec().fingerprint();
+    let x86 = crate::x86::spec().fingerprint();
+    assert_ne!(x64, x86);
+    assert_eq!(x64, crate::x64::spec().fingerprint());
+    assert_eq!(x64.to_string().len(), 32);
+}

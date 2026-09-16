@@ -6,7 +6,7 @@ use crate::{
     builder::SpecBuilder,
     diagnostic::{CompileError, Diagnostic, DiagnosticCode},
     resolve::resolve,
-    runtime::CompiledSpec,
+    runtime::{CompiledSpec, SpecFingerprint},
     source::{FileId, PreprocessOptions, SourceDb},
     spec::Spec,
     syntax::parse_to_ast,
@@ -137,7 +137,66 @@ impl<'src> Compiler<'src> {
             return Err(CompileError::one(diagnostic));
         }
 
+        // The preprocessed text is the whole input the compiler saw, so its
+        // digest identifies the compilation; see `SpecFingerprint`.
+        let fingerprint = SpecFingerprint::of_compilation(
+            self.sources
+                .prepared_text(prepared)
+                .expect("the source just preprocessed is in the database"),
+        );
         let spec = Spec::from_builder(builder);
-        Ok((CompiledSpec::from_spec(spec), lints))
+        Ok((CompiledSpec::from_spec(spec, fingerprint), lints))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TINY: &str = "define endian=little;
+        define space ram type=ram_space size=4 default;
+        define space register type=register_space size=4;
+        define register offset=0 size=4 [ r0 r1 ];
+        define token instr(8) op=(0,7);
+        :nop is op=0 { }
+        :inc r0 is op=1 { r0 = r0 + 1; }";
+
+    fn compile(text: &str, defines: &[(&str, &str)]) -> CompiledSpec {
+        let mut sources = SourceDb::new();
+        let root = sources.add_file("tiny.slaspec", text);
+        Compiler::new(&mut sources)
+            .with_options(CompileOptions {
+                defines: defines
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            })
+            .compile(root)
+            .expect("the specification compiles")
+    }
+
+    #[test]
+    fn the_fingerprint_is_a_function_of_the_source() {
+        let first = compile(TINY, &[]);
+        let again = compile(TINY, &[]);
+        assert_eq!(first.fingerprint(), again.fingerprint());
+
+        // The same registers and spaces, one constructor's semantics apart:
+        // structurally alike, not the same specification.
+        let alike = compile(&TINY.replace("r0 = r0 + 1", "r0 = r0 + 2"), &[]);
+        assert_ne!(first.fingerprint(), alike.fingerprint());
+    }
+
+    #[test]
+    fn defines_reach_the_fingerprint_through_the_preprocessed_text() {
+        let text = format!(
+            "{TINY}\n@ifdef WIDE\n:wide r1 is op=2 {{ r1 = 0; }}\n@endif\n"
+        );
+        let narrow = compile(&text, &[]);
+        let wide = compile(&text, &[("WIDE", "1")]);
+        assert_ne!(narrow.fingerprint(), wide.fingerprint());
+        // An inactive conditional leaves the text the parser sees unchanged,
+        // so the fingerprint is the base specification's.
+        assert_eq!(narrow.fingerprint(), compile(TINY, &[]).fingerprint());
     }
 }
