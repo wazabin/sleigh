@@ -847,13 +847,24 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
     ) -> Option<usize> {
         let mut size = 0;
 
-        let mut ends = vec![0usize; operand_values.len()];
+        // Only concatenated (`;`) patterns need the end position of earlier
+        // operands. Most constructors do not have one, and this function runs
+        // for every candidate considered during backtracking, so avoid making
+        // a throw-away allocation for the common case.
+        let mut ends = constructor
+            .token_pattern
+            .operands
+            .iter()
+            .any(|operand| operand.relative().is_some())
+            .then(|| vec![0usize; operand_values.len()]);
 
         for (idx, operand) in constructor.token_pattern.operands.iter().enumerate() {
             if !matches!(operand_values[idx], OperandValue::None) {
                 if let OperandType::Field(id) = operand.ty {
                     let end = self.spec.fields[id].parent_size() / 8 + operand.offset() / 8;
-                    ends[idx] = end;
+                    if let Some(ends) = &mut ends {
+                        ends[idx] = end;
+                    }
                     size = cmp::max(size, end);
                 }
                 continue;
@@ -872,8 +883,10 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
                 // extent, while `rm64` is what eats the SIB and displacement bytes.
                 // Operands are stored left-to-right, so the true end of the
                 // left-hand pattern is the maximum end over `..=rel`.
+                // `ends` exists whenever an operand is relative (see its
+                // construction above).
                 let base = cmp::max(
-                    ends[..=rel].iter().copied().max().unwrap_or(0),
+                    ends.as_ref()?[..=rel].iter().copied().max().unwrap_or(0),
                     min_size / 8,
                 );
                 offset += match operand.ty {
@@ -896,7 +909,9 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
                 }
             };
 
-            ends[idx] = end;
+            if let Some(ends) = &mut ends {
+                ends[idx] = end;
+            }
             operand_values[idx] = value;
             size = cmp::max(size, end);
         }

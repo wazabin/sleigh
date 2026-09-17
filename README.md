@@ -26,6 +26,16 @@ Compatibility against the vendored Ghidra corpus is measured, not asserted:
 cargo run -p wazabin-sleigh --example corpus
 ```
 
+The decode → p-code hot path has a timing benchmark and an allocation probe
+over the same x86-64 instructions (see the comments at the top of each file):
+
+```sh
+cargo bench -p wazabin-sleigh --bench decode -- --save-baseline before
+# ...change something...
+cargo bench -p wazabin-sleigh --bench decode -- --baseline before
+cargo test -p wazabin-sleigh --release --test allocations -- --nocapture
+```
+
 ## License
 
 The Rust code in this repository is licensed under the [MIT License](LICENSE).

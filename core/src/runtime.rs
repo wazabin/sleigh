@@ -9,7 +9,7 @@ mod pcode;
 mod refs;
 pub(crate) mod walker;
 
-use self::pcode::{expanded_instance, pcode_ast_for_instance};
+use self::pcode::{pcode_ast_for_instance, stream_instance};
 use crate::{
     builder::SymbolId,
     instance::ConstructorInstance,
@@ -26,8 +26,7 @@ pub use context_db::ContextDatabase;
 pub use effects::{ContextEffect, ContextScope};
 use pcode_types::{
     BitRangeInfo, InstructionPcode, PcodeLoweringContext, PcodeOp, PcodePlan, PcodeSink,
-    RegisterId, SpaceId, Varnode, emit_instruction, lower_instruction, lower_instruction_into,
-    plan_instruction, plan_instruction_with,
+    RegisterId, SpaceId, Varnode, lower_instruction, lower_instruction_into,
 };
 pub use refs::{FieldRef, RegisterRef, SpaceRef, SymbolKind, SymbolRef, TableRef, TokenRef};
 use serde::{Deserialize, Serialize};
@@ -752,6 +751,10 @@ impl<'spec, 'bytes> Instruction<'spec, 'bytes> {
     /// its instruction-wide state before any operation arrives, and never has
     /// to re-scan a flat p-code vector. The sink is returned so the consumer
     /// can recover its result.
+    ///
+    /// This is the production path: it plans and emits straight from the
+    /// resolved semantics, and never builds the [`PcodeAst`] that
+    /// [`pcode_ops`](Self::pcode_ops) lowers. The operations are the same.
     pub fn pcode_ops_streamed<S: PcodeSink>(
         &self,
         make_sink: impl FnOnce(&PcodePlan) -> S,
@@ -766,36 +769,7 @@ impl<'spec, 'bytes> Instruction<'spec, 'bytes> {
         &self,
         make_sink: impl FnOnce(&PcodePlan) -> Result<S, E>,
     ) -> Result<S, E> {
-        let (ast, widths) = expanded_instance(&self.spec.spec, &self.instance)?;
-        let context = InstructionPcodeContext::new(&self.spec.spec);
-        // Widths the specification already resolved leave the planner nothing
-        // to iterate; a body this decode could not resolve falls back to
-        // inferring them from the expanded statements.
-        #[cfg(debug_assertions)]
-        if let Some(widths) = &widths {
-            // Resolving widths early is only sound if it agrees with inferring
-            // them from the expanded statements. Check every decode a debug
-            // build makes, so any disagreement surfaces on its own instruction.
-            let inferred: pcode_types::LocalSizes =
-                pcode_types::infer_local_sizes(&ast.statements, &context);
-            for (id, size) in &inferred {
-                debug_assert_eq!(
-                    widths.get(id),
-                    Some(size),
-                    "resolved width disagrees with inference for {id:?}"
-                );
-            }
-        }
-
-        let plan = match widths {
-            Some(widths) => plan_instruction_with(&ast, &context, widths),
-            None => plan_instruction(&ast, &context),
-        }
-        .map_err(|error| EmitError::new(error.to_string()))?;
-        let mut sink = make_sink(&plan)?;
-        emit_instruction(&ast, &context, &plan, &mut sink)
-            .map_err(|error| EmitError::new(error.to_string()))?;
-        Ok(sink)
+        stream_instance(&self.spec.spec, &self.instance, make_sink)
     }
 
     /// Alias for [`pcode_ops`](Self::pcode_ops).

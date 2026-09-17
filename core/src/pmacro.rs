@@ -6,6 +6,7 @@ use crate::{
         expression::{Binop, Expression, ExpressionTy, Ident, Load, LocalVarId, Range, Unop},
         statement::{Ast, AstNode, DelaySlotArg, LabelOrNode},
     },
+    semantics::EmitError,
 };
 use jstd::registry::Registry;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,7 @@ use std::{
 
 pub(crate) mod expression;
 pub(crate) mod statement;
+pub(crate) mod validate;
 
 pub(crate) use pcode_types::{PMacroId, SymbolicWidth};
 
@@ -41,31 +43,56 @@ pub(crate) struct PCodeMacro {
     /// specification; the expander falls back to per-instruction inference for
     /// any instruction that splices such a body.
     pub(crate) unsized_locals: Vec<LocalVarId>,
-    /// Span-free copies used by the runtime p-code expander. Kept out of the
-    /// serialized specification: they are built lazily once per semantic body,
+    /// The span-free copy the runtime p-code traversal walks. Kept out of the
+    /// serialized specification: it is built lazily once per semantic body,
     /// then shared by every decoded instance of that constructor.
     #[serde(skip)]
-    pub(crate) runtime_body: OnceLock<Vec<Ast>>,
-    #[serde(skip)]
-    pub(crate) runtime_export: OnceLock<Option<Expression>>,
+    pub(crate) runtime: OnceLock<RuntimeBody>,
 }
 
-/// One p-code body as the runtime expander consumes it: its span-free
+/// A semantic body as the runtime consumes it, checked once for the nodes it
+/// cannot resolve so that no decode has to look for them.
+///
+/// The check is cached rather than repeated per decode because the streamed
+/// lowering never looks at most of a body: its planning pass skips the
+/// operands of data-flow statements, and its views reduce an unresolvable
+/// node to a nameless marker for the emitter to reject. Reporting such a node
+/// the way the eager expander did — by name, at the statement it sits in —
+/// therefore has to happen once, over the template itself. See
+/// [`validate`] for which nodes these are and why compilation never leaves
+/// them behind.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeBody {
+    pub(crate) statements: Vec<Ast>,
+    pub(crate) export: Option<Expression>,
+    /// The first statement the runtime cannot expand, and why. The traversal
+    /// reports it when it reaches that statement.
+    pub(crate) invalid: Option<(usize, EmitError)>,
+    /// Likewise for the export expression.
+    pub(crate) invalid_export: Option<EmitError>,
+}
+
+/// One p-code body as the runtime traversal consumes it: its span-free
 /// statements together with everything the specification resolved about them.
 pub(crate) struct BodyTemplate<'a> {
     pub(crate) body: &'a [Ast],
     pub(crate) export: Option<&'a Expression>,
+    pub(crate) invalid: Option<&'a (usize, EmitError)>,
+    pub(crate) invalid_export: Option<&'a EmitError>,
     pub(crate) non_build_table_refs: &'a [TableId],
     pub(crate) local_widths: &'a HashMap<LocalVarId, SymbolicWidth>,
     pub(crate) unsized_locals: &'a [LocalVarId],
 }
 
 impl PCodeMacro {
-    /// This body as the expander consumes it.
+    /// This body as the traversal consumes it.
     pub(crate) fn template(&self) -> BodyTemplate<'_> {
+        let runtime = self.runtime();
         BodyTemplate {
-            body: self.runtime_body(),
-            export: self.runtime_export(),
+            body: &runtime.statements,
+            export: runtime.export.as_ref(),
+            invalid: runtime.invalid.as_ref(),
+            invalid_export: runtime.invalid_export.as_ref(),
             non_build_table_refs: &self.non_build_table_refs,
             local_widths: &self.local_widths,
             unsized_locals: &self.unsized_locals,
@@ -81,8 +108,7 @@ impl PCodeMacro {
             non_build_table_refs: Vec::new(),
             local_widths: HashMap::new(),
             unsized_locals: Vec::new(),
-            runtime_body: OnceLock::new(),
-            runtime_export: OnceLock::new(),
+            runtime: OnceLock::new(),
         }
     }
 
@@ -114,8 +140,7 @@ impl PCodeMacro {
         let env = HashMap::new();
 
         self.body = expander.expand_body(&self.body, &env, 0, None)?;
-        self.runtime_body = OnceLock::new();
-        self.runtime_export = OnceLock::new();
+        self.runtime = OnceLock::new();
 
         if let Some(export) = self.export.clone() {
             let (prefix, export) = expander.expand_expr(export, &env, 0)?;
@@ -165,17 +190,19 @@ impl PCodeMacro {
         self.export.as_ref().map(|e| e.clone().strip_span())
     }
 
-    /// Returns a shared, span-free semantic body for runtime expansion.
-    pub(crate) fn runtime_body(&self) -> &[Ast] {
-        self.runtime_body
-            .get_or_init(|| self.body_stripped().collect())
-    }
-
-    /// Returns the shared, span-free export expression for runtime expansion.
-    pub(crate) fn runtime_export(&self) -> Option<&Expression> {
-        self.runtime_export
-            .get_or_init(|| self.export_stripped())
-            .as_ref()
+    /// The shared, span-free body the runtime traversal walks.
+    fn runtime(&self) -> &RuntimeBody {
+        self.runtime.get_or_init(|| {
+            let statements: Vec<Ast> = self.body_stripped().collect();
+            let export = self.export_stripped();
+            let (invalid, invalid_export) = validate::body(&statements, export.as_ref());
+            RuntimeBody {
+                statements,
+                export,
+                invalid,
+                invalid_export,
+            }
+        })
     }
 }
 
