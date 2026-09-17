@@ -19,10 +19,10 @@
 //!        ↓  HOT PATH
 //!   walker.rs           ← pattern matching → ConstructorInstance
 //!        ↓
-//!   runtime/pcode/collect.rs  ← pre-pass: resolve fields/tables
-//!   runtime/pcode/expand.rs   ← tree-walk expansion → PcodeAst
+//!   runtime/pcode/traverse.rs ← splices built sub-tables and delay slots
+//!   runtime/pcode/view.rs     ← resolves each template node in place
 //!        ↓
-//!   PcodeAst  →  harbinger/emit.rs  →  qcode IR
+//!   PcodeAst, or flat p-code streamed straight into a consumer's sink
 //! ```
 //!
 

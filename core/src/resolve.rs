@@ -680,8 +680,7 @@ impl Resolver {
             non_build_table_refs: Vec::new(),
             local_widths: std::collections::HashMap::new(),
             unsized_locals: Vec::new(),
-            runtime_body: std::sync::OnceLock::new(),
-            runtime_export: std::sync::OnceLock::new(),
+            runtime: std::sync::OnceLock::new(),
         };
         resolved.refresh_runtime_metadata(&self.ctx.symbols, &[]);
         Ok(resolved)
@@ -731,8 +730,8 @@ impl Resolver {
             AstNode::RangeAssignment { lhs, size, rhs } => AstNode::RangeAssignment {
                 lhs: Range {
                     value: Box::new(self.resolve_pcode_expr(&lhs.value, span)?),
-                    start: lhs.start.clone(),
-                    size: lhs.size.clone(),
+                    start: lhs.start,
+                    size: lhs.size,
                 },
                 size: *size,
                 rhs: self.resolve_pcode_expr(rhs, span)?,
@@ -834,8 +833,8 @@ impl Resolver {
             },
             ExpressionTy::Range(range) => ExpressionTy::Range(Range {
                 value: Box::new(self.resolve_pcode_expr(&range.value, span)?),
-                start: range.start.clone(),
-                size: range.size.clone(),
+                start: range.start,
+                size: range.size,
             }),
             ExpressionTy::Unop(unop) => ExpressionTy::Unop(Unop {
                 op: unop.op,
