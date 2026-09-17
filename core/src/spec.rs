@@ -5,6 +5,7 @@ use crate::{
     objects::table::TableId,
     pattern::OperandType,
     pmacro::{PCodeMacro, PMacroId},
+    register_map::RegisterMap,
     runtime::walker::update_context,
     token::{BitRangeField, BitRangeFieldId, TokenContext},
     token::{Token, TokenId},
@@ -67,6 +68,9 @@ pub(crate) struct Spec {
 
     /// Register definitions
     pub(crate) registers: Registry<RegisterId, Register>,
+
+    /// The registers by location, for enclosing-register and overlap queries.
+    pub(crate) register_map: RegisterMap,
 
     /// Space definitions
     pub(crate) spaces: Registry<SpaceId, Space>,
@@ -153,6 +157,7 @@ impl Spec {
             default_space,
             unique_space,
             fields: builder.fields,
+            register_map: RegisterMap::new(&builder.registers),
             registers: builder.registers,
             bitranges: builder.bitranges,
             field_tables: builder.field_tables,
