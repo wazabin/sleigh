@@ -1661,3 +1661,38 @@ fn x64_constructors_carry_their_instruction_family() {
         );
     }
 }
+
+#[test]
+fn x64_register_geometry_is_keyed_by_the_generated_constants() {
+    use crate::x64::regs;
+    use sleigh::{RegisterId, RegisterSlice, Varnode};
+
+    let spec = crate::x64::spec();
+    let varnode = |name: &str| {
+        let r = spec.register(name).unwrap();
+        Varnode::new(r.space(), r.offset() as u64, r.size())
+    };
+    assert_eq!(
+        spec.enclosing_register(varnode("AH")),
+        Some(RegisterSlice {
+            register: regs::RAX,
+            offset: 1,
+            size: 1
+        })
+    );
+    assert_eq!(
+        spec.enclosing_register(varnode("R8D")),
+        Some(RegisterSlice {
+            register: regs::R8,
+            offset: 0,
+            size: 4
+        })
+    );
+    assert_eq!(
+        spec.enclosing_register(varnode("XMM0")).map(|s| s.register),
+        Some(regs::ZMM0)
+    );
+    let overlaps: Vec<RegisterId> = spec.overlapping_registers(varnode("AH")).collect();
+    assert_eq!(overlaps, vec![regs::RAX, regs::EAX, regs::AX, regs::AH]);
+    assert_eq!(spec.register_at(varnode("AX")), Some(regs::AX));
+}

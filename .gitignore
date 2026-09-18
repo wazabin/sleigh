@@ -1,5 +1,4 @@
 /target/
-Cargo.lock
 lcov.info
 /.serena/
 __pycache__/

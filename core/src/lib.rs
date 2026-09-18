@@ -68,6 +68,7 @@ pub(crate) mod objects;
 mod pattern;
 mod pmacro;
 pub(crate) mod raw_parsing;
+mod register_map;
 mod resolve;
 pub(crate) mod spec;
 pub(crate) mod token;
@@ -90,6 +91,7 @@ pub use pcode_types::{
     PcodeOp, PcodePlan, PcodeSink, RegisterId, SPACE_CONST, Space, SpaceId, SpaceType, Varnode,
     lower_instruction,
 };
+pub use register_map::RegisterSlice;
 pub use runtime::{
     CompiledSpec, ConstructorMatch, Context, ContextBytes, ContextDatabase, ContextEffect,
     ContextError, ContextScope, DecodeError, Decoder, DelaySlotError, FieldRef, Instruction,

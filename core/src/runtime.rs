@@ -17,6 +17,7 @@ use crate::{
         field::{FieldId, FieldParent},
         table::TableId,
     },
+    register_map::RegisterSlice,
     semantics::{EmitError, InstructionInfo, PcodeAst, SemanticsSink},
     spec::Spec,
     token::{BitRangeFieldId, TokenContext},
@@ -295,6 +296,28 @@ impl CompiledSpec {
             .registers
             .iter()
             .map(|register| RegisterRef::new(register.id, register.inner))
+    }
+
+    /// The register declared at exactly `varnode`: same space, offset and
+    /// size.
+    pub fn register_at(&self, varnode: Varnode) -> Option<RegisterId> {
+        self.spec.register_map.at(varnode)
+    }
+
+    /// `varnode` as a slice of the widest register that wholly contains it:
+    /// `AH` is byte 1 of `RAX`, `XMM0` is the low 16 bytes of `ZMM0`.
+    /// `None` when no register contains it, which includes every varnode
+    /// outside a register space and any spanning two registers. See
+    /// [`RegisterSlice`] for what the slice does and does not say.
+    pub fn enclosing_register(&self, varnode: Varnode) -> Option<RegisterSlice> {
+        self.spec.register_map.enclosing(varnode)
+    }
+
+    /// Every register sharing at least one byte with `varnode`, in offset
+    /// order, widest first among registers at the same offset: for `AH`,
+    /// `RAX`, `EAX`, `AX` and `AH` itself.
+    pub fn overlapping_registers(&self, varnode: Varnode) -> impl Iterator<Item = RegisterId> + '_ {
+        self.spec.register_map.overlapping(varnode)
     }
 
     /// Looks up a field by name.
