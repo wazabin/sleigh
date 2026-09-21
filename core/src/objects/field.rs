@@ -219,7 +219,6 @@ impl Field {
     }
 
     /// How this field's raw bits are to be interpreted.
-    #[cfg(feature = "unstable-introspect")]
     pub(crate) fn field_type(&self) -> FieldType {
         self.ty
     }
@@ -257,7 +256,6 @@ pub(crate) struct FieldTables {
 
 impl FieldTables {
     /// The `attach variables` table `id` names.
-    #[cfg(feature = "unstable-introspect")]
     pub(crate) fn register_table(&self, id: FieldTableId) -> &[Option<RegisterId>] {
         &self.registers[id]
     }

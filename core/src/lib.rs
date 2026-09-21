@@ -84,7 +84,7 @@ pub use annotate::Annotations;
 pub use bitrange::BitRange;
 pub use compile::{CompileOptions, Compiler};
 pub use diagnostic::{CompileError, Diagnostic, DiagnosticCode, DiagnosticLabel, Severity};
-pub use objects::field::FieldId;
+pub use objects::field::{FieldId, FieldTableId};
 pub use pcode_error::{PcodeError, PcodeErrorTy, PcodeResult};
 pub use pcode_types::{
     BitRangeInfo, InstructionPcode, LabelId, Opcode, PcodeLowerError, PcodeLoweringContext,
@@ -95,8 +95,8 @@ pub use register_map::RegisterSlice;
 pub use runtime::{
     CompiledSpec, ConstructorMatch, Context, ContextBytes, ContextDatabase, ContextEffect,
     ContextError, ContextScope, DecodeError, Decoder, DelaySlotError, Exclusion, FieldRef,
-    Instruction, ParamField, RegisterRef, Shape, SpaceRef, SpecFingerprint, SymbolKind, SymbolRef,
-    TableRef, TokenRef,
+    Instruction, ParamField, RegisterField, RegisterRef, Shape, SpaceRef, SpecFingerprint,
+    SymbolKind, SymbolRef, TableRef, TokenRef,
 };
 pub use semantics::{
     Builtin, EmitError, InstructionInfo, LocalVarId, PcodeAst, PcodeBinaryOp, PcodeBinop,
