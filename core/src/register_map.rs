@@ -49,27 +49,51 @@ impl Entry {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SpaceRegisters {
     entries: Vec<Entry>,
+    /// `first[o]` is the index of the first entry at or past offset `o`, for
+    /// every offset up to the space's last register byte. Register spaces are
+    /// small and dense, so a table answers a lookup in one load where a
+    /// binary search costs a chain of them.
+    first: Vec<u32>,
     /// The widest register of the space, bounding how far back a query looks.
     max_size: usize,
 }
 
 impl SpaceRegisters {
-    fn insert(&mut self, entry: Entry) {
-        let key = |e: &Entry| (e.offset, Reverse(e.size));
-        let at = self.entries.partition_point(|e| key(e) < key(&entry));
-        self.entries.insert(at, entry);
-        self.max_size = self.max_size.max(entry.size);
+    fn new(mut entries: Vec<Entry>) -> Self {
+        entries.sort_by_key(|e| (e.offset, Reverse(e.size)));
+        let extent = entries.iter().map(Entry::end).max().unwrap_or(0) as usize;
+        let first = (0..=extent as u64)
+            .map(|o| entries.partition_point(|e| e.offset < o) as u32)
+            .collect();
+        let max_size = entries.iter().map(|e| e.size).max().unwrap_or(0);
+        Self {
+            entries,
+            first,
+            max_size,
+        }
+    }
+
+    /// The index of the first entry at or past `offset`.
+    fn first_at(&self, offset: u64) -> usize {
+        usize::try_from(offset)
+            .ok()
+            .and_then(|o| self.first.get(o))
+            .map_or(self.entries.len(), |&i| i as usize)
+    }
+
+    /// Entries starting exactly at `offset`, widest first.
+    fn starting_at(&self, offset: u64) -> impl Iterator<Item = &Entry> {
+        self.entries[self.first_at(offset)..]
+            .iter()
+            .take_while(move |e| e.offset == offset)
     }
 
     /// Entries starting at or before `offset` that can still reach it,
     /// nearest first.
     fn starting_before(&self, offset: u64) -> impl Iterator<Item = &Entry> {
-        let end = self.entries.partition_point(|e| e.offset <= offset);
-        let reach = offset.saturating_sub(self.max_size as u64);
-        self.entries[..end]
-            .iter()
-            .rev()
-            .take_while(move |e| e.offset >= reach)
+        let end = self.first_at(offset.saturating_add(1));
+        let start = self.first_at(offset.saturating_sub(self.max_size as u64));
+        self.entries[start..end].iter().rev()
     }
 
     fn overlapping(&self, offset: u64, size: usize) -> impl Iterator<Item = &Entry> {
@@ -77,8 +101,7 @@ impl SpaceRegisters {
         let before = self
             .starting_before(offset)
             .filter(move |e| e.end() > offset);
-        let from = self.entries.partition_point(|e| e.offset <= offset);
-        let after = self.entries[from..]
+        let after = self.entries[self.first_at(offset.saturating_add(1))..]
             .iter()
             .take_while(move |e| e.offset < end);
         before.chain(after)
@@ -94,19 +117,21 @@ pub(crate) struct RegisterMap {
 
 impl RegisterMap {
     pub(crate) fn new(registers: &Registry<RegisterId, Register>) -> Self {
-        let mut map = Self::default();
+        let mut by_space: Vec<Vec<Entry>> = Vec::new();
         for register in registers.iter() {
             let space = usize::from(register.inner.space);
-            if map.by_space.len() <= space {
-                map.by_space.resize_with(space + 1, Default::default);
+            if by_space.len() <= space {
+                by_space.resize_with(space + 1, Default::default);
             }
-            map.by_space[space].insert(Entry {
+            by_space[space].push(Entry {
                 offset: register.inner.offset as u64,
                 size: register.inner.size,
                 register: register.id,
             });
         }
-        map
+        Self {
+            by_space: by_space.into_iter().map(SpaceRegisters::new).collect(),
+        }
     }
 
     fn space(&self, space: SpaceId) -> Option<&SpaceRegisters> {
@@ -116,8 +141,8 @@ impl RegisterMap {
     /// The register declared at exactly `varnode`.
     pub(crate) fn at(&self, varnode: Varnode) -> Option<RegisterId> {
         self.space(varnode.space)?
-            .starting_before(varnode.offset)
-            .find(|e| e.offset == varnode.offset && e.size == varnode.size)
+            .starting_at(varnode.offset)
+            .find(|e| e.size == varnode.size)
             .map(|e| e.register)
     }
 
