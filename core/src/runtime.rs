@@ -7,6 +7,7 @@ mod context_db;
 mod effects;
 mod pcode;
 mod refs;
+pub(crate) mod shape;
 pub(crate) mod walker;
 
 use self::pcode::{pcode_ast_for_instance, stream_instance};
@@ -31,6 +32,7 @@ use pcode_types::{
 };
 pub use refs::{FieldRef, RegisterRef, SpaceRef, SymbolKind, SymbolRef, TableRef, TokenRef};
 use serde::{Deserialize, Serialize};
+pub use shape::{Exclusion, ParamField, Shape};
 use walker::Walker;
 
 pub use walker::{DecodeError, DelaySlotError};
@@ -536,6 +538,48 @@ impl<'spec> Decoder<'spec> {
             instance,
             raw_bytes,
         })
+    }
+
+    /// [`decode_one`](Self::decode_one), also reporting the instruction's
+    /// [`Shape`]: which bits chose its constructors and which fields are
+    /// its parameters. Costs a little more than a plain decode.
+    ///
+    /// Two encodings of one shape — equal after masking, whatever their
+    /// parameters — decode to the same constructors and operand layout
+    /// under the same context, so per-encoding work can be shared across
+    /// them; see [`Shape`].
+    pub fn decode_one_shaped<'bytes>(
+        &self,
+        addr: u64,
+        bytes: &'bytes [u8],
+        context: &ContextBytes,
+    ) -> Result<(Instruction<'spec, 'bytes>, Shape), DecodeError> {
+        self.spec
+            .validate_context(context)
+            .map_err(|_| DecodeError::InvalidContext)?;
+        let recorder = shape::ShapeRecorder::default();
+        let instance = Walker::try_get_shaped(
+            addr,
+            bytes,
+            &self.spec.spec,
+            self.spec.context_len(),
+            context.as_bytes(),
+            &recorder,
+        )?;
+        let consumed = instance.size + instance.delay_slot_len;
+        if consumed > bytes.len() {
+            return Err(DecodeError::InternalInvariant);
+        }
+        let shape = recorder.finish(instance.size);
+        let raw_bytes = Cow::Borrowed(&bytes[..consumed]);
+        Ok((
+            Instruction {
+                spec: self.spec,
+                instance,
+                raw_bytes,
+            },
+            shape,
+        ))
     }
 }
 

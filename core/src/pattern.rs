@@ -8,8 +8,8 @@ mod token;
 #[cfg(feature = "unstable-introspect")]
 pub(crate) use block::CompiledPatternBlock;
 pub(crate) use block::PatternBlock;
-pub(crate) use combined::CompiledCombinedPattern;
 pub(crate) use combined::{CombinedPattern, CombinedRange};
+pub(crate) use combined::{CompiledCombinedPattern, PatternOutcome};
 pub(crate) use token::{Alignment, OperandId, OperandType, TokenPattern};
 
 #[derive(Debug, Clone, Copy)]
