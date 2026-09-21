@@ -126,7 +126,7 @@ use crate::{
     constructor::{Constructor, ConstructorId},
     instance::OperandValue as OperandValueAlias,
     objects::{
-        field::{FIELD_INST_NEXT, FIELD_INST_START, FieldId, FieldParent},
+        field::{FIELD_INST_NEXT, FIELD_INST_START, FieldId, FieldParent, FieldTableId, FieldType},
         table::TableId,
     },
     pattern::{CombinedRange, OperandType, PatternOutcome},
@@ -645,7 +645,13 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
             let at = range.shifted(self.base_offset * 8);
             // A big-endian token permutes the field's bits across the
             // stream, so they are not one run a parameter names.
-            if decisive || field.is_attached() || self.spec.token_endian(tok) == Endian::Big {
+            if decisive || self.spec.token_endian(tok) == Endian::Big {
+                self.note_field_bits(tok, &range);
+            } else if let FieldType::Registers(table) = field.field_type()
+                && let Some(holes) = self.register_holes(table, field.range.size())
+            {
+                recorder.note_register(&at, table, holes.into_iter());
+            } else if field.is_attached() {
                 self.note_field_bits(tok, &range);
             } else {
                 recorder.note_param(&at, field.signed);
@@ -674,6 +680,35 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
         } else {
             value as i64
         })
+    }
+
+    /// Whether a field of `width` bits indexing register table `table`
+    /// makes a [`RegisterField`](super::RegisterField): the registers are
+    /// distinct and of one size, so a lift over one is a lift over any.
+    /// Returns the values the table has no register for.
+    fn register_holes(&self, table: FieldTableId, width: usize) -> Option<Vec<u64>> {
+        if !(1..=8).contains(&width) {
+            return None;
+        }
+        let registers = self.spec.field_tables.register_table(table);
+        let mut size = None;
+        for (i, &register) in registers.iter().enumerate() {
+            let Some(register) = register else {
+                continue;
+            };
+            if registers[..i].contains(&Some(register)) {
+                return None;
+            }
+            let this = self.spec.registers[register].size;
+            if *size.get_or_insert(this) != this {
+                return None;
+            }
+        }
+        Some(
+            (0..1u64 << width)
+                .filter(|&v| registers.get(v as usize).copied().flatten().is_none())
+                .collect(),
+        )
     }
 
     fn matches_constructor_pattern(&self, constructor: &Constructor) -> bool {

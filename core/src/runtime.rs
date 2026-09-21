@@ -15,7 +15,7 @@ use crate::{
     builder::SymbolId,
     instance::ConstructorInstance,
     objects::{
-        field::{FieldId, FieldParent},
+        field::{FieldId, FieldParent, FieldTableId},
         table::TableId,
     },
     register_map::RegisterSlice,
@@ -32,7 +32,7 @@ use pcode_types::{
 };
 pub use refs::{FieldRef, RegisterRef, SpaceRef, SymbolKind, SymbolRef, TableRef, TokenRef};
 use serde::{Deserialize, Serialize};
-pub use shape::{Exclusion, ParamField, Shape};
+pub use shape::{Exclusion, ParamField, RegisterField, Shape};
 use walker::Walker;
 
 pub use walker::{DecodeError, DelaySlotError};
@@ -298,6 +298,22 @@ impl CompiledSpec {
             .registers
             .iter()
             .map(|register| RegisterRef::new(register.id, register.inner))
+    }
+
+    /// The registers an `attach variables` table binds to a field's values,
+    /// by value — the table a [`RegisterField`] indexes. `None` where the
+    /// table binds no register (`_`); a value past the end has none either.
+    pub fn attached_registers(&self, table: FieldTableId) -> &[Option<RegisterId>] {
+        self.spec.field_tables.register_table(table)
+    }
+
+    /// The varnode register `id` is declared at: its space, offset and
+    /// size. The inverse of [`register_at`](Self::register_at).
+    pub fn register_varnode(&self, id: RegisterId) -> Option<Varnode> {
+        (usize::from(id) < self.spec.registers.len()).then(|| {
+            let register = &self.spec.registers[id];
+            Varnode::new(register.space, register.offset as u64, register.size)
+        })
     }
 
     /// The register declared at exactly `varnode`: same space, offset and

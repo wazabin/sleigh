@@ -18,10 +18,16 @@
 //! parameter fields. A caller memoizing per-encoding work can key it on the
 //! masked bytes, check the exclusions, and parameterize it on the fields,
 //! and serve every encoding of the shape from one entry.
+//!
+//! A field read as an index into an `attach variables` table is a
+//! [`RegisterField`]: its bits are not in the mask either, since the
+//! constructors and their operand layout are the same whichever register
+//! the value names, and a caller can parameterize on the register as it
+//! does on an integer.
 
 use std::cell::{Cell, RefCell};
 
-use crate::bitrange::BitRange;
+use crate::{bitrange::BitRange, objects::field::FieldTableId};
 
 use super::walker::{extract_bytes, signed};
 
@@ -53,6 +59,36 @@ impl ParamField {
         } else {
             raw as i64
         }
+    }
+}
+
+/// One register field of a [`Shape`]: a run of instruction bits read as an
+/// index into an `attach variables` table, so that its value names which
+/// register an operand is. Only a field whose table holds distinct
+/// registers of one size, read for the register alone, is one; a value the
+/// table has no register for is an [exclusion](Shape::exclusions) of the
+/// shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RegisterField {
+    /// The field's lowest bit, numbered as a [`ParamField`]'s.
+    pub bit: u32,
+    /// The field's width in bits, at most 8.
+    pub width: u8,
+    /// The table the value indexes; see
+    /// [`CompiledSpec::attached_registers`](super::CompiledSpec::attached_registers).
+    pub table: FieldTableId,
+}
+
+impl RegisterField {
+    fn range(self) -> BitRange {
+        let start = self.bit as usize;
+        BitRange::new(start, start + usize::from(self.width) - 1)
+    }
+
+    /// The field's value in `bytes`, an instruction of the shape: the index
+    /// into the table.
+    pub fn value(self, bytes: &[u8]) -> u64 {
+        extract_bytes(bytes, &self.range())
     }
 }
 
@@ -91,6 +127,7 @@ pub struct Shape {
     mask: Box<[u8]>,
     exclusions: Box<[Exclusion]>,
     params: Box<[ParamField]>,
+    registers: Box<[RegisterField]>,
     overrun: bool,
 }
 
@@ -127,6 +164,14 @@ impl Shape {
         &self.params
     }
 
+    /// The register fields, in the order the decoder read them. Two may
+    /// cover the same bits — one constructor reads a field as a 32-bit
+    /// register, another the same bits as its 64-bit one — and, like a
+    /// parameter, a field may overlap the mask.
+    pub fn registers(&self) -> &[RegisterField] {
+        &self.registers
+    }
+
     /// Whether `bytes`, a stream whose first [`len`](Self::len) bytes agree
     /// with an instruction of this shape on the mask, start an instruction
     /// of this shape: they match no exclusion. A stream too short for an
@@ -159,6 +204,7 @@ pub(crate) struct ShapeRecorder {
     mask: RefCell<Vec<u8>>,
     exclusions: RefCell<Vec<Exclusion>>,
     params: RefCell<Vec<ParamField>>,
+    registers: RefCell<Vec<RegisterField>>,
     overrun: Cell<bool>,
 }
 
@@ -235,6 +281,50 @@ impl ShapeRecorder {
         });
     }
 
+    /// Records a field read as an index into register table `table`, and
+    /// excludes every value in `holes` — those the table has no register
+    /// for — from the shape.
+    pub(crate) fn note_register(
+        &self,
+        range: &BitRange,
+        table: FieldTableId,
+        holes: impl Iterator<Item = u64>,
+    ) {
+        let width = range.size();
+        debug_assert!((1..=8).contains(&width));
+        let field = RegisterField {
+            bit: range.start() as u32,
+            width: width as u8,
+            table,
+        };
+        let mut registers = self.registers.borrow_mut();
+        if registers.contains(&field) {
+            return;
+        }
+        registers.push(field);
+        let offset = range.start() / 8;
+        let len = range.end() / 8 - offset + 1;
+        for hole in holes {
+            let mut mask = vec![0u8; len];
+            let mut value = vec![0u8; len];
+            for (i, bit) in range.iter().enumerate() {
+                mask[bit / 8 - offset] |= 1 << (bit % 8);
+                if hole >> i & 1 != 0 {
+                    value[bit / 8 - offset] |= 1 << (bit % 8);
+                }
+            }
+            let exclusion = Exclusion {
+                offset,
+                mask: mask.into(),
+                value: value.into(),
+            };
+            let mut exclusions = self.exclusions.borrow_mut();
+            if !exclusions.contains(&exclusion) {
+                exclusions.push(exclusion);
+            }
+        }
+    }
+
     /// Records that the decode depended on bytes past the instruction.
     pub(crate) fn note_overrun(&self) {
         self.overrun.set(true);
@@ -253,13 +343,132 @@ impl ShapeRecorder {
         // A parameter past the end is a decode the walker abandoned; it
         // decides nothing.
         params.retain(|param| (param.bit as usize + usize::from(param.width)).div_ceil(8) <= len);
+        let mut registers = self.registers.into_inner();
+        registers
+            .retain(|field| (field.bit as usize + usize::from(field.width)).div_ceil(8) <= len);
         let exclusions = self.exclusions.into_inner();
         Shape {
             len,
             mask: mask.into_boxed_slice(),
             exclusions: exclusions.into_boxed_slice(),
             params: params.into_boxed_slice(),
+            registers: registers.into_boxed_slice(),
             overrun,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Compiler, Decoder, SourceDb};
+
+    /// A two-byte instruction set: an opcode byte, then a byte whose low
+    /// three bits pick a register from a full table, whose next three pick
+    /// one from a table with a hole, and whose top two bits are an
+    /// immediate. `add` reads a register field; `set` reads an immediate;
+    /// `mix` reads one of each; `pick` dispatches on the register bits.
+    fn spec() -> crate::CompiledSpec {
+        let mut sources = SourceDb::new();
+        let root = sources.add_file(
+            "regs.slaspec",
+            "define endian=little;
+             define space ram type=ram_space size=4 default;
+             define space register type=register_space size=4;
+             define register offset=0 size=4 [ r0 r1 r2 r3 r4 r5 r6 r7 ];
+             define token op(8) opcode=(0,7);
+             define token arg(8) ra=(0,2) rb=(3,5) rraw=(0,2) imm=(6,7);
+             attach variables [ ra ] [ r0 r1 r2 r3 r4 r5 r6 r7 ];
+             attach variables [ rb ] [ r0 r1 r2 r3 _ r5 r6 r7 ];
+             :add ra is opcode=0; ra { ra = ra + 1; }
+             :set imm is opcode=1; imm { r0 = imm; }
+             :mix ra, rb is opcode=2; ra & rb { ra = rb; }
+             :pick ra is opcode=3; ra & rraw=1 { ra = 1; }
+             :pick ra is opcode=3; ra { ra = 2; }",
+        );
+        Compiler::new(&mut sources)
+            .compile(root)
+            .expect("the register spec compiles")
+    }
+
+    #[test]
+    fn a_register_field_is_a_parameter_out_of_the_mask() {
+        let spec = spec();
+        let decoder = Decoder::new(&spec);
+        let context = spec.new_context();
+        let (_, shape) = decoder
+            .decode_one_shaped(0, &[0x00, 0x05], &context)
+            .expect("add r5 decodes");
+        assert_eq!(shape.mask(), &[0xff, 0x00]);
+        assert!(shape.params().is_empty());
+        let [field] = shape.registers() else {
+            panic!("one register field, not {:?}", shape.registers());
+        };
+        assert_eq!((field.bit, field.width), (8, 3));
+        assert_eq!(field.value(&[0x00, 0x05]), 5);
+        assert_eq!(
+            spec.attached_registers(field.table)
+                .iter()
+                .map(|r| r.map(|r| spec
+                    .registers()
+                    .nth(usize::from(r))
+                    .unwrap()
+                    .name()
+                    .to_owned()))
+                .collect::<Vec<_>>(),
+            (0..8).map(|i| Some(format!("r{i}"))).collect::<Vec<_>>()
+        );
+        assert!(shape.exclusions().is_empty());
+    }
+
+    #[test]
+    fn a_hole_in_the_table_excludes_its_value() {
+        let spec = spec();
+        let decoder = Decoder::new(&spec);
+        let context = spec.new_context();
+        let (_, shape) = decoder
+            .decode_one_shaped(0, &[0x02, 0x0a], &context)
+            .expect("mix r2, r1 decodes");
+        assert_eq!(shape.mask(), &[0xff, 0x00]);
+        assert_eq!(shape.registers().len(), 2);
+        let [hole] = shape.exclusions() else {
+            panic!("one exclusion, for rb=4: {:?}", shape.exclusions());
+        };
+        assert_eq!(
+            (hole.offset, &*hole.mask, &*hole.value),
+            (1, &[0x38][..], &[0x20][..])
+        );
+        assert!(!shape.admits(&[0x02, 0x22]), "rb = 4 binds no register");
+        assert!(shape.admits(&[0x02, 0x2a]));
+        assert!(
+            decoder.decode_one(0, &[0x02, 0x22], &context).is_err()
+                || spec.attached_registers(shape.registers()[1].table)[4].is_none()
+        );
+    }
+
+    #[test]
+    fn a_register_field_a_pattern_tests_is_in_the_mask_or_excluded() {
+        let spec = spec();
+        let decoder = Decoder::new(&spec);
+        let context = spec.new_context();
+        // `pick r1` matched the constructor testing the bits: they chose.
+        let (_, shape) = decoder
+            .decode_one_shaped(0, &[0x03, 0x01], &context)
+            .expect("pick r1 decodes");
+        assert_eq!(shape.mask()[1] & 0x07, 0x07, "the bits chose a constructor");
+        // `pick r2` passed that constructor over: its pattern is excluded,
+        // and the field is a parameter of the other constructor's shape.
+        let (_, shape) = decoder
+            .decode_one_shaped(0, &[0x03, 0x02], &context)
+            .expect("pick r2 decodes");
+        assert_eq!(shape.mask()[1] & 0x07, 0);
+        assert_eq!(shape.registers().len(), 1);
+        assert!(!shape.admits(&[0x03, 0x01]));
+        assert!(shape.admits(&[0x03, 0x07]));
+        // An immediate is a parameter, not a register field.
+        let (_, shape) = decoder
+            .decode_one_shaped(0, &[0x01, 0x80], &context)
+            .expect("set 2 decodes");
+        assert!(shape.registers().is_empty());
+        assert_eq!(shape.params().len(), 1);
     }
 }
