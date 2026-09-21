@@ -52,6 +52,40 @@ pub(crate) enum CompiledPatternBlock {
 }
 
 impl CompiledPatternBlock {
+    /// The per-byte mask of a `Masked` block.
+    pub(crate) fn mask(&self) -> Option<&[u8]> {
+        match self {
+            Self::Masked { masks, .. } => Some(masks),
+            _ => None,
+        }
+    }
+
+    /// The masks and values of a `Masked` block.
+    pub(crate) fn test_bytes(&self) -> Option<(&[u8], &[u8])> {
+        match self {
+            Self::Masked { masks, values } => Some((masks, values)),
+            _ => None,
+        }
+    }
+
+    /// Why `data` does not match, when it does not: the first byte that
+    /// disagrees, or that `data` is too short to test.
+    pub(crate) fn test(&self, data: &[u8]) -> Result<(), Option<usize>> {
+        match self {
+            Self::AlwaysTrue => Ok(()),
+            Self::AlwaysFalse => Err(None),
+            Self::Masked { masks, values } => {
+                if data.len() < masks.len() {
+                    return Err(None);
+                }
+                data.iter()
+                    .zip(masks.iter().zip(values.iter()))
+                    .position(|(byte, (mask, value))| byte & mask != *value)
+                    .map_or(Ok(()), |byte| Err(Some(byte)))
+            }
+        }
+    }
+
     pub(crate) fn matches(&self, data: &[u8]) -> bool {
         match self {
             Self::AlwaysTrue => true,

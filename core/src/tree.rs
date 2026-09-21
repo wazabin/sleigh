@@ -181,6 +181,7 @@ impl TreeNode {
         let tree = &walker.spec.trees[tree_id];
         match self {
             TreeNode::Node { range, children } => {
+                walker.note_decision(range);
                 let v = walker.value_over(range);
                 children
                     .get(v as usize)

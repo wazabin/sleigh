@@ -129,9 +129,9 @@ use crate::{
         field::{FIELD_INST_NEXT, FIELD_INST_START, FieldId, FieldParent},
         table::TableId,
     },
-    pattern::{CombinedRange, OperandType},
+    pattern::{CombinedRange, OperandType, PatternOutcome},
     pmacro::statement::DelaySlotArg,
-    runtime::effects::collect_context_effects,
+    runtime::{effects::collect_context_effects, shape::ShapeRecorder},
     spec::Spec,
     tree::{INSTRUCTION_TREE_ID, TreeId},
 };
@@ -190,7 +190,7 @@ thread_local! {
 /// decode hot path, where the width comes from a compiled specification and a
 /// panic would take the caller down. Compilation rejects such fields where it
 /// can (see the constraint width check).
-fn extract_bytes(data: &[u8], range: &BitRange) -> u64 {
+pub(crate) fn extract_bytes(data: &[u8], range: &BitRange) -> u64 {
     let width = range.size().min(u64::BITS as usize);
 
     let byte_offset = range.start() / 8;
@@ -243,7 +243,7 @@ fn gather_be_token_field(
 ///
 /// A range at least 64 bits wide already fills the result, so there is nothing
 /// to sign-extend; shifting by the full width would be undefined.
-fn signed(value: u64, range: &BitRange) -> i64 {
+pub(crate) fn signed(value: u64, range: &BitRange) -> i64 {
     let width = range.size();
     if width >= u64::BITS as usize {
         return value as i64;
@@ -377,6 +377,12 @@ pub(crate) struct Walker<'spec, 'bytes, 'ctx> {
     pub(crate) bytes: &'bytes [u8],
     pub(crate) spec: &'spec Spec,
     pub(crate) inst_start: u64,
+    /// Where the walker records which bits it decides by, when the caller
+    /// asked for the instruction's shape.
+    recorder: Option<&'ctx ShapeRecorder>,
+    /// The byte offset of `bytes` within the instruction being decoded, so
+    /// a sub-table's walker records bits at their instruction position.
+    base_offset: usize,
 }
 
 /// How much look-ahead decoding a call to [`Walker::try_get`] may still do.
@@ -410,6 +416,28 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
             context_len,
             context,
             LookAhead::Allowed,
+            None,
+        )
+    }
+
+    /// [`try_get`](Self::try_get), recording into `recorder` which bits the
+    /// decode decided by; see [`crate::runtime::Shape`].
+    pub(crate) fn try_get_shaped(
+        inst_start: u64,
+        bytes: &'bytes [u8],
+        spec: &'spec Spec,
+        context_len: usize,
+        context: &'ctx [u8],
+        recorder: &'ctx ShapeRecorder,
+    ) -> Result<ConstructorInstance, DecodeError> {
+        Self::try_get_inner(
+            inst_start,
+            bytes,
+            spec,
+            context_len,
+            context,
+            LookAhead::Allowed,
+            Some(recorder),
         )
     }
 
@@ -420,6 +448,7 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
         context_len: usize,
         context: &'ctx [u8],
         look_ahead: LookAhead,
+        recorder: Option<&'ctx ShapeRecorder>,
     ) -> Result<ConstructorInstance, DecodeError> {
         if context.len() != context_len {
             return Err(DecodeError::InvalidContext);
@@ -430,6 +459,8 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
             bytes,
             spec,
             inst_start,
+            recorder,
+            base_offset: 0,
         };
 
         // The outermost decode funds the search; a delay-slot or look-ahead
@@ -484,6 +515,11 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
 
         if directive.is_none() && !wants_inst_next2 {
             return Ok(());
+        }
+
+        // Whatever follows this instruction now decides its decode.
+        if let Some(recorder) = self.recorder {
+            recorder.note_overrun();
         }
 
         if look_ahead == LookAhead::Forbidden {
@@ -562,6 +598,7 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
             context_len,
             self.context,
             LookAhead::Forbidden,
+            None,
         )
     }
 
@@ -594,10 +631,26 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
         usize::try_from(bytes).map_err(|_| DecodeError::DelaySlot(DelaySlotError::InvalidLength))
     }
 
-    fn get_field_value(&self, id: FieldId, bit_offset: usize) -> Option<i64> {
+    /// Reads field `id` at `bit_offset` into this walker's bytes. `decisive`
+    /// says the value chooses something about the decode besides its
+    /// operand — the shape then keeps its bits in the mask.
+    fn get_field_value(&self, id: FieldId, bit_offset: usize, decisive: bool) -> Option<i64> {
         let field = &self.spec.fields[id];
 
         let range = field.range.shifted(bit_offset);
+
+        if let Some(recorder) = self.recorder
+            && let FieldParent::Token(tok) = field.parent
+        {
+            let at = range.shifted(self.base_offset * 8);
+            // A big-endian token permutes the field's bits across the
+            // stream, so they are not one run a parameter names.
+            if decisive || field.is_attached() || self.spec.token_endian(tok) == Endian::Big {
+                self.note_field_bits(tok, &range);
+            } else {
+                recorder.note_param(&at, field.signed);
+            }
+        }
 
         let value = match field.parent {
             // A big-endian token's bits are permuted across its bytes, so the
@@ -624,10 +677,98 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
     }
 
     fn matches_constructor_pattern(&self, constructor: &Constructor) -> bool {
-        constructor
-            .runtime_patterns
-            .iter()
-            .any(|pattern| pattern.matches(self.bytes, self.context))
+        let Some(recorder) = self.recorder else {
+            return constructor
+                .runtime_patterns
+                .iter()
+                .any(|pattern| pattern.matches(self.bytes, self.context));
+        };
+        // A matching alternative decides by every bit it tests. One that
+        // fails on its instruction half excludes: the shape keeps its
+        // pattern, since an encoding matching it decodes differently — but
+        // only when the whole constructor fails, and only when the failure
+        // is not already fixed by the mask. One whose context half fails
+        // can never match under this context, which the caller keys on.
+        let mut failed: Vec<(Option<usize>, &[u8], &[u8])> = Vec::new();
+        for pattern in &constructor.runtime_patterns {
+            match pattern.test(self.bytes, self.context) {
+                PatternOutcome::Matched => {
+                    if let Some(mask) = pattern.instruction_mask() {
+                        recorder.note_mask(self.base_offset, mask);
+                    }
+                    return true;
+                }
+                PatternOutcome::FailedContext => {}
+                PatternOutcome::FailedByte(byte) => {
+                    let (mask, value) =
+                        pattern.instruction_test().expect("a masked pattern failed");
+                    failed.push((Some(byte), mask, value));
+                }
+                PatternOutcome::FailedShort => {
+                    let (mask, value) =
+                        pattern.instruction_test().expect("a masked pattern failed");
+                    failed.push((None, mask, value));
+                }
+            }
+        }
+        for (byte, mask, value) in failed {
+            recorder.note_exclusion(self.base_offset, byte, mask, value);
+        }
+        false
+    }
+
+    /// Records, for a candidate skipped because the bytes ran out before
+    /// its minimum size, that no encoding of the shape matches it: with
+    /// more bytes it would have been tested.
+    fn note_untested(&self, constructor: &Constructor) {
+        let Some(recorder) = self.recorder else {
+            return;
+        };
+        for pattern in &constructor.runtime_patterns {
+            if pattern.context_matches(self.context)
+                && let Some((mask, value)) = pattern.instruction_test()
+            {
+                recorder.note_exclusion(self.base_offset, None, mask, value);
+            }
+        }
+    }
+
+    /// Records the bits of a decisive field of token `tok` at `range`
+    /// within this walker's bytes.
+    fn note_field_bits(&self, tok: crate::token::TokenId, range: &BitRange) {
+        let Some(recorder) = self.recorder else {
+            return;
+        };
+        if self.spec.token_endian(tok) == Endian::Big {
+            let token_bits = self.spec.token_size(tok);
+            for i in 0..range.size() {
+                let pos = token_stream_bit(token_bits, Endian::Big, range.start() + i)
+                    + self.base_offset * 8;
+                recorder.note_bits(&BitRange::singleton(pos));
+            }
+        } else {
+            recorder.note_bits(&range.shifted(self.base_offset * 8));
+        }
+    }
+
+    /// Records that the decision tree dispatched on `range`.
+    pub(crate) fn note_decision(&self, range: &CombinedRange) {
+        if let (Some(recorder), CombinedRange::Instruction(range)) = (self.recorder, range) {
+            recorder.note_bits(&range.shifted(self.base_offset * 8));
+        }
+    }
+
+    /// Whether a value of one of `constructor`'s fields can change the
+    /// decode beyond its own operand: an action assigns context from it,
+    /// or a delay slot is sized by it.
+    fn fields_are_decisive(&self, constructor: &Constructor) -> bool {
+        constructor.delay_slot.is_some()
+            || constructor.actions.iter().any(|action| match action {
+                Action::Assign { field_id, .. } => {
+                    self.spec.fields[*field_id].parent == FieldParent::Context
+                }
+                Action::GlobalSet { .. } => false,
+            })
     }
 
     pub(crate) fn do_action(
@@ -757,6 +898,7 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
         constructor: &Constructor,
         operand_values: &mut [OperandValue],
     ) -> Option<()> {
+        let decisive = self.recorder.is_some() && self.fields_are_decisive(constructor);
         for (idx, operand) in constructor.token_pattern.operands.iter().enumerate() {
             if operand.relative().is_some() {
                 continue;
@@ -764,8 +906,11 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
 
             match operand.ty {
                 OperandType::Field(field_id) => {
-                    operand_values[idx] =
-                        OperandValue::Int(self.get_field_value(field_id, operand.offset())?);
+                    operand_values[idx] = OperandValue::Int(self.get_field_value(
+                        field_id,
+                        operand.offset(),
+                        decisive,
+                    )?);
                 }
 
                 OperandType::Register(_) | OperandType::Table(_) => continue,
@@ -806,6 +951,8 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
             spec: self.spec,
             bytes,
             inst_start: self.inst_start,
+            recorder: self.recorder,
+            base_offset: self.base_offset + offset,
         };
 
         // Descending too far raises its own flag, so `try_get_inner` can tell
@@ -831,11 +978,16 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
         Some((end, OperandValue::Constructor(child)))
     }
 
-    fn resolve_relative_field(&self, id: FieldId, offset: usize) -> Option<(usize, OperandValue)> {
+    fn resolve_relative_field(
+        &self,
+        id: FieldId,
+        offset: usize,
+        decisive: bool,
+    ) -> Option<(usize, OperandValue)> {
         let field = &self.spec.fields[id];
         Some((
             field.parent_size() / 8 + offset,
-            OperandValue::Int(self.get_field_value(id, offset * 8)?),
+            OperandValue::Int(self.get_field_value(id, offset * 8, decisive)?),
         ))
     }
 
@@ -846,6 +998,7 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
         context: &[u8],
     ) -> Option<usize> {
         let mut size = 0;
+        let decisive = self.recorder.is_some() && self.fields_are_decisive(constructor);
 
         // Only concatenated (`;`) patterns need the end position of earlier
         // operands. Most constructors do not have one, and this function runs
@@ -896,7 +1049,7 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
             }
 
             let (end, value) = match operand.ty {
-                OperandType::Field(id) => self.resolve_relative_field(id, offset)?,
+                OperandType::Field(id) => self.resolve_relative_field(id, offset, decisive)?,
 
                 OperandType::Table(id) => self.resolve_relative_table(context, offset, id)?,
 
@@ -955,6 +1108,7 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
 
         if constructor.min_size() > self.bytes.len() {
             debug_print!("Not enough bytes available");
+            self.note_untested(constructor);
             return None;
         }
 

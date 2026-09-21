@@ -94,8 +94,9 @@ pub use pcode_types::{
 pub use register_map::RegisterSlice;
 pub use runtime::{
     CompiledSpec, ConstructorMatch, Context, ContextBytes, ContextDatabase, ContextEffect,
-    ContextError, ContextScope, DecodeError, Decoder, DelaySlotError, FieldRef, Instruction,
-    RegisterRef, SpaceRef, SpecFingerprint, SymbolKind, SymbolRef, TableRef, TokenRef,
+    ContextError, ContextScope, DecodeError, Decoder, DelaySlotError, Exclusion, FieldRef,
+    Instruction, ParamField, RegisterRef, Shape, SpaceRef, SpecFingerprint, SymbolKind, SymbolRef,
+    TableRef, TokenRef,
 };
 pub use semantics::{
     Builtin, EmitError, InstructionInfo, LocalVarId, PcodeAst, PcodeBinaryOp, PcodeBinop,

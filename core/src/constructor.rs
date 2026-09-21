@@ -93,6 +93,43 @@ pub(crate) struct ConstructorSrc {
     pub(crate) end: crate::Size,
 }
 
+/// A map of a constructor's few operands or globals, kept as entries in
+/// key order and scanned. The decoder looks one up several times per
+/// constructor of every decode, and hashing a key costs more than
+/// scanning the handful of entries a constructor has.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SmallMap<K, V>(Vec<(K, V)>);
+
+impl<K: Ord + Copy, V> SmallMap<K, V> {
+    pub(crate) fn get(&self, key: &K) -> Option<&V> {
+        self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&K, &V)> + '_ {
+        self.0.iter().map(|(k, v)| (k, v))
+    }
+}
+
+impl<K: Ord + Copy, V> From<HashMap<K, V>> for SmallMap<K, V> {
+    fn from(map: HashMap<K, V>) -> Self {
+        let mut entries: Vec<(K, V)> = map.into_iter().collect();
+        entries.sort_by_key(|(k, _)| *k);
+        Self(entries)
+    }
+}
+
+impl<K: Ord + Copy, V> std::ops::Index<&K> for SmallMap<K, V> {
+    type Output = V;
+
+    fn index(&self, key: &K) -> &V {
+        self.get(key).expect("a key of the map")
+    }
+}
+
 /// A compiled constructor definition, used at decode time by the Walker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Constructor {
@@ -102,9 +139,9 @@ pub(crate) struct Constructor {
     pub(crate) runtime_patterns: Vec<CompiledCombinedPattern>,
     pub(crate) display: Vec<DisplayElement>,
     pub(crate) actions: Vec<Action>,
-    pub(crate) field_map: HashMap<FieldId, OperandId>,
-    pub(crate) table_map: HashMap<TableId, OperandId>,
-    pub(crate) global_map: HashMap<FieldId, crate::Size>,
+    pub(crate) field_map: SmallMap<FieldId, OperandId>,
+    pub(crate) table_map: SmallMap<TableId, OperandId>,
+    pub(crate) global_map: SmallMap<FieldId, crate::Size>,
     pub(crate) pmacro: PCodeMacro,
 
     /// The `delayslot` directive in this constructor's body, hoisted out of the
@@ -202,9 +239,9 @@ impl Constructor {
                 .references_field(FIELD_INST_NEXT2, &fields[FIELD_INST_NEXT2].name),
             token_pattern,
             runtime_patterns,
-            field_map,
-            table_map,
-            global_map,
+            field_map: SmallMap::from(field_map),
+            table_map: SmallMap::from(table_map),
+            global_map: SmallMap::from(global_map),
             min_size: builder.min_size as crate::Size,
             display: builder.display_list,
             actions: builder.actions,

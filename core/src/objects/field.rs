@@ -212,6 +212,12 @@ impl Field {
         })
     }
 
+    /// Whether an `attach` statement gives the field's value a meaning
+    /// beyond the integer read out of its bits.
+    pub(crate) fn is_attached(&self) -> bool {
+        self.ty != FieldType::Integer
+    }
+
     /// How this field's raw bits are to be interpreted.
     #[cfg(feature = "unstable-introspect")]
     pub(crate) fn field_type(&self) -> FieldType {

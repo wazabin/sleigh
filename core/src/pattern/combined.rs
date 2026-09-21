@@ -82,6 +82,47 @@ impl CompiledCombinedPattern {
     pub(crate) fn matches(&self, bytes: &[u8], context: &[u8]) -> bool {
         self.instruction.matches(bytes) && self.context.matches(context)
     }
+
+    /// The per-byte mask of the instruction half, when it tests anything.
+    pub(crate) fn instruction_mask(&self) -> Option<&[u8]> {
+        self.instruction.mask()
+    }
+
+    /// Whether the context half matches `context`.
+    pub(crate) fn context_matches(&self, context: &[u8]) -> bool {
+        self.context.matches(context)
+    }
+
+    /// The instruction half's masks and values, when it tests anything.
+    pub(crate) fn instruction_test(&self) -> Option<(&[u8], &[u8])> {
+        self.instruction.test_bytes()
+    }
+
+    /// [`matches`](Self::matches), saying why not.
+    pub(crate) fn test(&self, bytes: &[u8], context: &[u8]) -> PatternOutcome {
+        if !self.context.matches(context) {
+            return PatternOutcome::FailedContext;
+        }
+        match self.instruction.test(bytes) {
+            Ok(()) => PatternOutcome::Matched,
+            Err(Some(byte)) => PatternOutcome::FailedByte(byte),
+            // Too short, or a pattern that never matches — which the tree
+            // would not have offered.
+            Err(None) => PatternOutcome::FailedShort,
+        }
+    }
+}
+
+/// How a [`CompiledCombinedPattern`] fared against an instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PatternOutcome {
+    Matched,
+    /// The context half failed; the instruction half was not consulted.
+    FailedContext,
+    /// The instruction half first disagreed at this byte.
+    FailedByte(usize),
+    /// The instruction bytes ran out before the pattern did.
+    FailedShort,
 }
 
 impl CombinedPattern {
