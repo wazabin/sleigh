@@ -849,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "wazabin-sleigh"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "clap",
  "criterion",
@@ -864,14 +864,14 @@ dependencies = [
 
 [[package]]
 name = "wazabin-sleigh-fmt"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "wazabin-sleigh",
 ]
 
 [[package]]
 name = "wazabin-sleigh-precompile"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "bincode",
  "clap",
