@@ -2327,6 +2327,52 @@ fn an_ellipsis_longer_than_the_side_it_meets_is_rejected() {
     );
 }
 
+// ── Fields after a `;` ────────────────────────────────────────────────────────
+
+/// Several fields of one token that follows a `;` all start where the
+/// left-hand pattern ends.
+///
+/// x86's memory `PCLMULQDQ` is `... & m128; imm8 & imm8_4 & imm8_0`: three
+/// views of the one trailing byte. The walker placed each relative field at
+/// the running end of the constructor, which already counted the sibling
+/// fields placed before it, so the three were laid end to end and the
+/// instruction came out two bytes long. `ea` here stands in for `m128`: it is
+/// one byte, or two when its top bit is set.
+#[test]
+fn fields_of_one_token_after_a_concatenation_share_its_start() {
+    let mut sources = SourceDb::new();
+    let root = sources.add_file(
+        "relative_fields.sla",
+        "define endian=little;\n\
+         define space ram type=ram_space size=4 default;\n\
+         define space register type=register_space size=4;\n\
+         define register offset=0 size=4 [r0];\n\
+         define token op(8) opc=(0,7);\n\
+         define token modrm(8) long=(7,7) base=(0,6);\n\
+         define token imm(8) imm8=(0,7) imm8_4=(4,4) imm8_0=(0,0);\n\
+         ea: base is long=0 & base { export *[const]:4 base; }\n\
+         ea: base is long=1 & base; opc { export *[const]:4 base; }\n\
+         :hit ea, imm8, imm8_4, imm8_0 is opc=0x44; ea; imm8 & imm8_4 & imm8_0 { r0 = ea; }\n",
+    );
+    let spec = Compiler::new(&mut sources).compile(root).expect("compiles");
+    let decoder = Decoder::new(&spec);
+    let context = spec.new_context();
+
+    // The trailing byte is followed by filler that would be misread as the
+    // two single-bit fields if they were placed after `imm8`.
+    for (bytes, len, display) in [
+        (&[0x44u8, 0x05, 0x11, 0xee, 0xee][..], 3, "hit 5, 17, 1, 1"),
+        (&[0x44, 0x85, 0x00, 0x10, 0xee, 0xee], 4, "hit 5, 16, 1, 0"),
+        (&[0x44, 0x05, 0x01, 0xee, 0xee], 3, "hit 5, 1, 0, 1"),
+    ] {
+        let instruction = decoder
+            .decode_one(0x1000, bytes, &context)
+            .expect("decodes");
+        assert_eq!(instruction.len(), len, "{bytes:02x?}");
+        assert_eq!(instruction.display().unwrap(), display, "{bytes:02x?}");
+    }
+}
+
 // ── Load pointers ─────────────────────────────────────────────────────────────
 
 const LOAD_PREFIX_FIXTURE: &str = include_str!("fixtures/load_prefix/root.sla");
