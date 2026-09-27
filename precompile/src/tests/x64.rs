@@ -1696,3 +1696,311 @@ fn x64_register_geometry_is_keyed_by_the_generated_constants() {
     assert_eq!(overlaps, vec![regs::RAX, regs::EAX, regs::AX, regs::AH]);
     assert_eq!(spec.register_at(varnode("AX")), Some(regs::AX));
 }
+
+// ---------------------------------------------------------------------------
+// open_sleigh x86 fixes: BTR's mask width, the ymm FMA results, the x87
+// transcendental range check, VEX.256 VAES / VPCLMULQDQ, the legacy and VEX
+// GFNI forms, and VBLENDPD's displayed imm8. Encodings and lengths are from
+// GNU as / objdump.
+// ---------------------------------------------------------------------------
+
+/// Every logical op's operands and result have the same size, as p-code
+/// requires (a lifter asserts it).
+fn assert_logical_ops_are_same_size(bytes: &[u8]) {
+    let spec = crate::x64::spec();
+    let instruction = sleigh::Decoder::new(spec)
+        .decode_one(0x1000, bytes, &spec.new_context())
+        .expect("decodes");
+    let pcode = instruction.pcode_ops().expect("emits");
+    for op in &pcode.ops {
+        if matches!(
+            op.opcode,
+            sleigh::Opcode::IntAnd
+                | sleigh::Opcode::IntOr
+                | sleigh::Opcode::IntXor
+                | sleigh::Opcode::IntNegate
+        ) {
+            let out = op.output.expect("has an output").size;
+            for input in &op.inputs {
+                assert_eq!(input.size, out, "{instruction}: {op:?}");
+            }
+        }
+    }
+}
+
+/// `btr %rax,(%rdi)`: the mask that clears the bit is one byte, like the byte
+/// it is ANDed into. It used to be built at the width of the bit offset, and
+/// the complement was an 8-byte value ANDed into a 1-byte one.
+#[test]
+fn x64_btr_mem_reg_builds_a_byte_mask() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, ast) = decode_ast(spec, &context, b"\x48\x0f\xb3\x07");
+    assert_eq!(display, "BTR [RDI],RAX");
+    assert_eq!(info.length, 4);
+    assert_ast_eq(
+        spec,
+        &ast,
+        r#"v3 = RDI;
+            v0 = (v3 + (RAX s>> 3));
+            v1 = (RAX & 7);
+            v2 = ((load(size=1, ptr=v0) >> v1) & 1);
+            load(size=1, ptr=v0) = (load(size=1, ptr=v0) & ~(1:1 << v1));
+            CF = (v2 != 0);
+            OF = undef();
+            SF = undef();
+            AF = undef();
+            PF = undef();"#,
+    );
+
+    // 16/32/64-bit, with and without LOCK, and BTS/BTC for contrast.
+    for bytes in [
+        &b"\x48\x0f\xb3\x07"[..],
+        b"\x0f\xb3\x07",
+        b"\x66\x0f\xb3\x07",
+        b"\xf0\x48\x0f\xb3\x07",
+        b"\xf0\x66\x0f\xb3\x07",
+        b"\x48\x0f\xab\x07",
+        b"\x48\x0f\xbb\x07",
+    ] {
+        assert_logical_ops_are_same_size(bytes);
+    }
+}
+
+/// `vfmadd231pd %ymm2,%ymm1,%ymm0`: the result is all 32 bytes.
+#[test]
+fn x64_vfmadd231pd_ymm_keeps_the_upper_half() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, ast) = decode_ast(spec, &context, b"\xc4\xe2\xf5\xb8\xc2");
+    assert_eq!(display, "VFMADD231PD YMM0, YMM1, YMM2");
+    assert_eq!(info.length, 5);
+    assert_ast_eq(
+        spec,
+        &ast,
+        r#"v0:32 = vfmadd231pd_fma(YMM0, YMM1, YMM2);
+            ZMM0 = zext(v0);"#,
+    );
+}
+
+/// `fsin`: an operand with |x| >= 2^63 sets C2 and is left in ST(0); any
+/// other clears C2. Infinity (exponent 0x7fff) is invalid, not out of range.
+#[test]
+fn x64_fsin_reports_an_out_of_range_operand_in_c2() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, ast) = decode_ast(spec, &context, b"\xd9\xfe");
+    assert_eq!(display, "FSIN");
+    assert_eq!(info.length, 2);
+    assert_ast_eq(
+        spec,
+        &ast,
+        r#"v8:2 = ((FPUStatusWord >> 11) & 7);
+            v9:2 = (((v8 + 0) & 7) * 10);
+            FPUInstructionPointer = 4096:8;
+            v0:1 = 0;
+            v3:2 = range(load(space=x87, size=10, ptr=v9), 64, 15);
+            v0 = ((v3 >= 16446) && (v3 != 32767));
+            FPUStatusWord = ((FPUStatusWord & 64511) | (zext(v0) << 10));
+            if v0 goto <done>;
+            load(space=x87, size=10, ptr=v9):10 = fsin(load(space=x87, size=10, ptr=v9));
+            <done>
+            v5:2 = ((FPUStatusWord & ~FPUControlWord) & 63);
+            v6:2 = zext((v5 != 0));
+            v7:2 = zext((v5 == 0));
+            FPULastInstructionOpcode = ((FPULastInstructionOpcode * v7) | (510:2 * v6));"#,
+    );
+}
+
+/// `fcos`, `fsincos`, `fptan`: the same check, and an out-of-range operand
+/// skips the push of the cosine / 1.0 as well as the result.
+#[test]
+fn x64_x87_trig_skips_result_and_push_when_out_of_range() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    for (bytes, name, op) in [
+        (&b"\xd9\xff"[..], "FCOS", "fcos("),
+        (b"\xd9\xfb", "FSINCOS", "fcos("),
+        (b"\xd9\xf2", "FPTAN", "fptan("),
+    ] {
+        let (display, info, ast) = decode_ast(spec, &context, bytes);
+        assert_eq!(display, name);
+        assert_eq!(info.length, 2);
+        let pcode = ast.pretty_print(spec);
+        let check = pcode
+            .find("v0 = ((")
+            .unwrap_or_else(|| panic!("{name}: no range check in\n{pcode}"));
+        assert!(
+            pcode.contains("&& (") && pcode.contains(">= 16446"),
+            "{name}:\n{pcode}"
+        );
+        assert!(
+            pcode.contains("(FPUStatusWord & 64511) | (zext(v0) << 10)"),
+            "{name}:\n{pcode}"
+        );
+        let skip = pcode.find("if v0 goto <done>;").expect("branches past");
+        let compute = pcode.find(op).expect("computes");
+        let done = pcode.find("<done>\n").expect("joins");
+        assert!(
+            check < skip && skip < compute && compute < done,
+            "{name}:\n{pcode}"
+        );
+        // The push (FPUTagWord update) is inside the skipped region.
+        if name != "FCOS" {
+            let push = pcode.find("FPUTagWord = ").expect("pushes");
+            assert!(skip < push && push < done, "{name}:\n{pcode}");
+        }
+    }
+}
+
+/// `vaesenc %ymm2,%ymm1,%ymm0` and `vaesenclast 0x20(%rdi),%ymm9,%ymm10`:
+/// VEX.256 VAES runs the round on each 128-bit lane.
+#[test]
+fn x64_vaes_ymm_runs_a_round_per_lane() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, ast) = decode_ast(spec, &context, b"\xc4\xe2\x75\xdc\xc2");
+    assert_eq!(display, "VAESENC YMM0, YMM1, YMM2");
+    assert_eq!(info.length, 5);
+    assert_ast_eq(
+        spec,
+        &ast,
+        r#"v0:16 = XMM2;
+            v1:16 = YMM2_H;
+            v2:16 = XMM1;
+            v3:16 = YMM1_H;
+            v4:16 = aesenc(v3, v1);
+            XMM0 = aesenc(v2, v0);
+            YMM0_H = v4;"#,
+    );
+
+    for (bytes, display, len) in [
+        (
+            &b"\xc4\x62\x35\xdd\x57\x20"[..],
+            "VAESENCLAST YMM10, YMM9, ymmword ptr [RDI + 32]",
+            6,
+        ),
+        (b"\xc4\xc2\x75\xde\xdc", "VAESDEC YMM3, YMM1, YMM12", 5),
+        // 0x1009 = inst_next (0x1009) + 0
+        (
+            b"\xc4\xe2\x75\xdf\x1d\x00\x00\x00\x00",
+            "VAESDECLAST YMM3, YMM1, ymmword ptr [4105]",
+            9,
+        ),
+    ] {
+        let (got, info, _) = decode_ast(spec, &context, bytes);
+        assert_eq!(got, display);
+        assert_eq!(info.length, len);
+    }
+}
+
+/// `vpclmulqdq $0x11,%ymm2,%ymm1,%ymm0` and `vpclmulqdq $0x10,0x40(%rip),%ymm1,%ymm8`:
+/// VEX.256 VPCLMULQDQ, one carry-less multiply per 128-bit lane.
+#[test]
+fn x64_vpclmulqdq_ymm_multiplies_per_lane() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, ast) = decode_ast(spec, &context, b"\xc4\xe3\x75\x44\xc2\x11");
+    assert_eq!(display, "VPCLMULQDQ YMM0, YMM1, YMM2, 17");
+    assert_eq!(info.length, 6);
+    let pcode = ast.pretty_print(spec);
+    assert!(
+        pcode.contains("XMM0 = ") && pcode.contains("YMM0_H = "),
+        "{pcode}"
+    );
+
+    // RIP-relative: inst_next = 0x100a, + 0x40 = 4170.
+    let (display, info, _) =
+        decode_ast(spec, &context, b"\xc4\x63\x75\x44\x05\x40\x00\x00\x00\x10");
+    assert_eq!(display, "VPCLMULQDQ YMM8, YMM1, ymmword ptr [4170], 16");
+    assert_eq!(info.length, 10);
+}
+
+/// The legacy and VEX GFNI forms decode (only EVEX used to), and their
+/// p-code writes the destination qword by qword.
+#[test]
+fn x64_gfni_legacy_and_vex_forms_decode() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    for (bytes, display, len) in [
+        (&b"\x66\x0f\x38\xcf\xc1"[..], "GF2P8MULB XMM0, XMM1", 5),
+        // inst_next = 0x100a, + 0x10 = 4122.
+        (
+            b"\x66\x44\x0f\x38\xcf\x0d\x10\x00\x00\x00",
+            "GF2P8MULB XMM9, xmmword ptr [4122]",
+            10,
+        ),
+        (b"\xc4\xe2\x71\xcf\xc2", "VGF2P8MULB XMM0, XMM1, XMM2", 5),
+        (
+            b"\xc4\xe2\x75\xcf\x07",
+            "VGF2P8MULB YMM0, YMM1, ymmword ptr [RDI]",
+            5,
+        ),
+        (
+            b"\x66\x0f\x3a\xce\xc1\x05",
+            "GF2P8AFFINEQB XMM0, XMM1, 5",
+            6,
+        ),
+        (
+            b"\x66\x0f\x3a\xce\x44\x24\x10\x05",
+            "GF2P8AFFINEQB XMM0, xmmword ptr [RSP + 16], 5",
+            8,
+        ),
+        (
+            b"\x66\x0f\x3a\xcf\xc1\x63",
+            "GF2P8AFFINEINVQB XMM0, XMM1, 99",
+            6,
+        ),
+        (
+            b"\xc4\xe3\xf1\xce\xc2\x05",
+            "VGF2P8AFFINEQB XMM0, XMM1, XMM2, 5",
+            6,
+        ),
+        (
+            b"\xc4\xe3\xf5\xce\xc2\x05",
+            "VGF2P8AFFINEQB YMM0, YMM1, YMM2, 5",
+            6,
+        ),
+        (
+            b"\xc4\xe3\xa5\xcf\x44\x58\x20\x63",
+            "VGF2P8AFFINEINVQB YMM0, YMM11, ymmword ptr [RAX + RBX*2 + 32], 99",
+            8,
+        ),
+    ] {
+        let (got, info, ast) = decode_ast(spec, &context, bytes);
+        assert_eq!(got, display);
+        assert_eq!(info.length, len, "{display}");
+        let pcode = ast.pretty_print(spec);
+        let dest = if display.contains("XMM9") {
+            "XMM9"
+        } else {
+            "XMM0"
+        };
+        let dest = if display.starts_with('V') {
+            "YMM0"
+        } else {
+            dest
+        };
+        assert!(
+            pcode.contains(&format!("range({dest}, 0, 64) = ")),
+            "{display}:\n{pcode}"
+        );
+        assert!(
+            pcode.contains(&format!("range({dest}, 64, 64) = ")),
+            "{display}:\n{pcode}"
+        );
+    }
+}
+
+/// `vblendpd $0x5a,0x10(%rsp),%xmm2,%xmm7`: the whole imm8 is displayed.
+#[test]
+fn x64_vblendpd_displays_the_whole_imm8() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, _) = decode_ast(spec, &context, b"\xc4\xe3\x69\x0d\x7c\x24\x10\x5a");
+    assert_eq!(display, "VBLENDPD XMM7, XMM2, xmmword ptr [RSP + 16], 90");
+    assert_eq!(info.length, 8);
+    let (display, info, _) = decode_ast(spec, &context, b"\xc4\xe3\x6d\x0d\xfb\x5a");
+    assert_eq!(display, "VBLENDPD YMM7, YMM2, YMM3, 90");
+    assert_eq!(info.length, 6);
+}
