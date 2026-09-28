@@ -144,6 +144,42 @@ pub mod x86 {
     }
 }
 
+/// 32-bit x86 in segmented protected mode (a DOS extender's flat model with
+/// real selectors): every memory operand lifts to `segment(selector, offset)`.
+pub mod x86_segmented {
+    use super::*;
+
+    const SPEC_BYTES: &[u8] = include_bytes!(env!("X86_SEGMENTED_COMPILED_SPEC"));
+    static SPEC: OnceLock<CompiledSpec> = OnceLock::new();
+
+    /// The compiled specification, deserialised on first use.
+    pub fn spec() -> &'static CompiledSpec {
+        SPEC.get_or_init(|| {
+            bincode::serde::decode_from_slice(SPEC_BYTES, bincode::config::standard())
+                .map(|(spec, _)| spec)
+                .expect("x86_segmented spec should deserialize")
+        })
+    }
+
+    /// Named [`RegisterId`](sleigh::RegisterId) constants for this
+    /// specification, generated at build time.
+    pub mod regs {
+        use sleigh::RegisterId;
+        include!(env!("X86_SEGMENTED_REGS"));
+    }
+
+    mod family_table {
+        include!(env!("X86_SEGMENTED_FAMILIES"));
+    }
+
+    /// The `#@family` annotations on this specification's constructors.
+    pub fn families() -> Families {
+        Families {
+            entries: &family_table::FAMILIES,
+        }
+    }
+}
+
 /// 64-bit RISC-V.
 pub mod riscv {
     use super::*;
