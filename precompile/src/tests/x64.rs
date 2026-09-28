@@ -1624,6 +1624,84 @@ fn x64_imul_imm8_sib_disp8_opsize16() {
     assert_eq!(info.length, 6);
 }
 
+// ---------------------------------------------------------------------------
+// `PCLMULQDQ` / `VPCLMULQDQ` with a memory operand.
+//
+// Both constructors end in `... & m128; imm8 & imm8_4 & imm8_0`: three fields
+// of the one trailing imm8 byte. Every one of them is `;`-relative to the
+// left-hand pattern, and the walker used to place a relative *field* at the
+// running end of the constructor, which already included the sibling fields
+// placed before it. The three views of the byte were laid end to end and the
+// instruction came out two bytes long. They must all start where `m128` ends.
+//
+// Expected values below were taken from `objdump -d` of the GNU as output.
+// ---------------------------------------------------------------------------
+
+/// `pclmulqdq $0x01,0x10(%rsp),%xmm7` — SIB + disp8.
+#[test]
+fn x64_pclmulqdq_mem_sib_disp8() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, _) = decode_ast(spec, &context, b"\x66\x0f\x3a\x44\x7c\x24\x10\x01");
+    assert_eq!(display, "PCLMULQDQ XMM7, xmmword ptr [RSP + 16], 1");
+    assert_eq!(info.length, 8);
+}
+
+/// `pclmulqdq $0x11,0x40(%rip),%xmm7` — RIP-relative. The displayed target
+/// folds in `inst_next`, so a long decode is visible twice over.
+#[test]
+fn x64_pclmulqdq_mem_rip_relative() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, _) =
+        decode_ast(spec, &context, b"\x66\x0f\x3a\x44\x3d\x40\x00\x00\x00\x11");
+    // decoded at 0x1000, so inst_next = 0x100a and 0x100a + 0x40 = 4170
+    assert_eq!(display, "PCLMULQDQ XMM7, xmmword ptr [4170], 17");
+    assert_eq!(info.length, 10);
+}
+
+/// `pclmulqdq $0x10,(%rax,%rbx,4),%xmm9` — REX.R, SIB, no displacement.
+#[test]
+fn x64_pclmulqdq_mem_rex_sib() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, _) = decode_ast(spec, &context, b"\x66\x44\x0f\x3a\x44\x0c\x98\x10");
+    assert_eq!(display, "PCLMULQDQ XMM9, xmmword ptr [RAX + RBX*4], 16");
+    assert_eq!(info.length, 8);
+}
+
+/// `vpclmulqdq $0x10,0x40(%rip),%xmm2,%xmm7` — VEX, RIP-relative.
+#[test]
+fn x64_vpclmulqdq_mem_rip_relative() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, _) =
+        decode_ast(spec, &context, b"\xc4\xe3\x69\x44\x3d\x40\x00\x00\x00\x10");
+    // inst_next = 0x100a, so the target is again 4170.
+    assert_eq!(display, "VPCLMULQDQ XMM7, XMM2, xmmword ptr [4170], 16");
+    assert_eq!(info.length, 10);
+}
+
+/// `vpclmulqdq $0x01,0x10(%rsp),%xmm2,%xmm7` — VEX, SIB + disp8.
+#[test]
+fn x64_vpclmulqdq_mem_sib_disp8() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, _) = decode_ast(spec, &context, b"\xc4\xe3\x69\x44\x7c\x24\x10\x01");
+    assert_eq!(display, "VPCLMULQDQ XMM7, XMM2, xmmword ptr [RSP + 16], 1");
+    assert_eq!(info.length, 8);
+}
+
+/// `pclmulqdq $0x11,%xmm1,%xmm7` — register form, the control case.
+#[test]
+fn x64_pclmulqdq_register_form() {
+    let spec = crate::x64::spec();
+    let context = spec.new_context();
+    let (display, info, _) = decode_ast(spec, &context, b"\x66\x0f\x3a\x44\xf9\x11");
+    assert_eq!(display, "PCLMULHQHQDQ XMM7, XMM1");
+    assert_eq!(info.length, 6);
+}
+
 /// The families of every constructor a decode reaches.
 ///
 /// A prefixed instruction roots at a prefix-dispatch constructor and reaches

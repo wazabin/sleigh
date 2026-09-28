@@ -1073,14 +1073,17 @@ impl<'spec, 'bytes, 'ctx> Walker<'spec, 'bytes, 'ctx> {
                 // left-hand pattern is the maximum end over `..=rel`.
                 // `ends` exists whenever an operand is relative (see its
                 // construction above).
+                //
+                // Fields start there too, not at the running end of the
+                // constructor: that already counts the operands placed before
+                // this one on the *right* of the `;`. PCLMULQDQ's
+                // `... & m128; imm8 & imm8_4 & imm8_0` names one byte three
+                // times, and must not lay the three end to end.
                 let base = cmp::max(
                     ends.as_ref()?[..=rel].iter().copied().max().unwrap_or(0),
                     min_size / 8,
                 );
-                offset += match operand.ty {
-                    OperandType::Field(_) => cmp::max(size, base),
-                    OperandType::Table(_) | OperandType::Register(_) => base,
-                };
+                offset += base;
             }
 
             let (end, value) = match operand.ty {
