@@ -6,6 +6,12 @@ context = { longMode = 1, addrsize = 2, opsize = 1 }
 path = "open_sleigh/src/x86/x86.slaspec"
 context = { addrsize = 1, opsize = 1 }
 
+# 32-bit segmented protected mode (DOS extenders): every memory operand is
+# `segment(selector, offset)`.
+[x86_segmented]
+path = "open_sleigh/src/x86/x86.slaspec"
+context = { addrsize = 1, opsize = 1, segmented = 1 }
+
 [riscv]
 path = "open_sleigh/src/RISCV/riscv.lp64d.slaspec"
 context = { MXL = 2 }
