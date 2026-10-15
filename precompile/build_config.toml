@@ -17,7 +17,7 @@ context = { addrsize = 1, opsize = 1, segmented = 1 }
 # `segment(seg, off16)`.
 [x86_real]
 path = "open_sleigh/src/x86/x86.slaspec"
-context = { addrsize = 0, opsize = 0 }
+context = { addrsize = 0, opsize = 0, realMode = 1 }
 
 [riscv]
 path = "open_sleigh/src/RISCV/riscv.lp64d.slaspec"
