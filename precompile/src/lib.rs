@@ -180,6 +180,42 @@ pub mod x86_segmented {
     }
 }
 
+/// 16-bit x86 in real mode (DOS): 16-bit operands and addresses; every memory
+/// operand lifts to `segment(seg, off16)`.
+pub mod x86_real {
+    use super::*;
+
+    const SPEC_BYTES: &[u8] = include_bytes!(env!("X86_REAL_COMPILED_SPEC"));
+    static SPEC: OnceLock<CompiledSpec> = OnceLock::new();
+
+    /// The compiled specification, deserialised on first use.
+    pub fn spec() -> &'static CompiledSpec {
+        SPEC.get_or_init(|| {
+            bincode::serde::decode_from_slice(SPEC_BYTES, bincode::config::standard())
+                .map(|(spec, _)| spec)
+                .expect("x86_real spec should deserialize")
+        })
+    }
+
+    /// Named [`RegisterId`](sleigh::RegisterId) constants for this
+    /// specification, generated at build time.
+    pub mod regs {
+        use sleigh::RegisterId;
+        include!(env!("X86_REAL_REGS"));
+    }
+
+    mod family_table {
+        include!(env!("X86_REAL_FAMILIES"));
+    }
+
+    /// The `#@family` annotations on this specification's constructors.
+    pub fn families() -> Families {
+        Families {
+            entries: &family_table::FAMILIES,
+        }
+    }
+}
+
 /// 64-bit RISC-V.
 pub mod riscv {
     use super::*;

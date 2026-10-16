@@ -12,6 +12,13 @@ context = { addrsize = 1, opsize = 1 }
 path = "open_sleigh/src/x86/x86.slaspec"
 context = { addrsize = 1, opsize = 1, segmented = 1 }
 
+# 16-bit real mode (DOS .COM / MZ): Ghidra's "x86:LE:16:Real Mode"
+# (`x86-16-real.pspec`): 16-bit operands and addresses, every memory operand
+# `segment(seg, off16)`.
+[x86_real]
+path = "open_sleigh/src/x86/x86.slaspec"
+context = { addrsize = 0, opsize = 0, realMode = 1 }
+
 [riscv]
 path = "open_sleigh/src/RISCV/riscv.lp64d.slaspec"
 context = { MXL = 2 }
