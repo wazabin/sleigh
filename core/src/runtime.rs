@@ -5,6 +5,7 @@ use std::{borrow::Cow, fmt};
 mod context;
 mod context_db;
 mod effects;
+mod origin;
 mod pcode;
 mod refs;
 pub(crate) mod shape;
@@ -26,6 +27,7 @@ use crate::{
 pub use context::{Context, ContextBytes, ContextError};
 pub use context_db::ContextDatabase;
 pub use effects::{ContextEffect, ContextScope};
+pub use origin::{ConstantOrigin, ConstantOrigins};
 use pcode_types::{
     BitRangeInfo, InstructionPcode, PcodeLoweringContext, PcodeOp, PcodePlan, PcodeSink,
     RegisterId, SpaceId, Varnode, lower_instruction, lower_instruction_into,
@@ -812,6 +814,72 @@ impl<'spec, 'bytes> Instruction<'spec, 'bytes> {
         let ast = self.pcode_ast()?;
         lower_instruction(&ast, &InstructionPcodeContext::new(&self.spec.spec))
             .map_err(|error| EmitError::new(error.to_string()))
+    }
+
+    /// [`pcode_ops`](Self::pcode_ops), with the [`ConstantOrigin`] of every
+    /// constant it contains: whether the constant is absolute or derived from
+    /// this instruction's address.
+    ///
+    /// SLEIGH folds `inst_next + simm32` (x86-64's RIP-relative operand),
+    /// `inst_start + 4 * imm` (a relative branch) and the like into plain
+    /// literals; this tells them apart from immediates and absolute
+    /// addresses, for analyses of position-independent code. A constant that
+    /// depends on the address other than as a fixed offset from it — a page
+    /// address, a masked one — is [`ConstantOrigin::Mixed`], never absolute.
+    ///
+    /// The instruction is not decoded again: its disassembly actions are
+    /// replayed over the decode in an abstract domain, and the result carried
+    /// to each constant by a second emission of its p-code. That second
+    /// emission is the cost over [`pcode_ops`](Self::pcode_ops).
+    ///
+    /// ```
+    /// # use sleigh::{Compiler, ConstantOrigin, Decoder, SourceDb};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut sources = SourceDb::new();
+    /// # let root = sources.add_file("tiny.slaspec", "define endian=little;
+    /// #     define space ram type=ram_space size=4 default;
+    /// #     define space register type=register_space size=4;
+    /// #     define register offset=0 size=4 [ r0 ];
+    /// #     define token instr(16) op=(0,7) simm8=(8,15) signed;
+    /// #     rel: reloc is simm8 [ reloc = inst_next + simm8; ] { export *[ram]:4 reloc; }
+    /// #     :ldr rel is op=1 & rel { r0 = rel; }");
+    /// # let spec = Compiler::new(&mut sources).compile(root)?;
+    /// // `ldr` loads from `inst_next + simm8`: here 0x1002 + 0x10.
+    /// let instruction = Decoder::new(&spec)
+    ///     .decode_one(0x1000, &[1, 0x10], &spec.new_context())?;
+    ///
+    /// let (pcode, origins) = instruction.pcode_ops_with_origins()?;
+    /// let load = &pcode.ops[0];
+    /// assert_eq!(load.inputs[1].offset, 0x1012);
+    /// assert_eq!(
+    ///     origins.get(0, 1),
+    ///     Some(ConstantOrigin::InstRelative { offset_from_inst_start: 0x12 })
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Those of [`pcode_ops`](Self::pcode_ops).
+    pub fn pcode_ops_with_origins(&self) -> Result<(InstructionPcode, ConstantOrigins), EmitError> {
+        let pcode = self.pcode_ops()?;
+        let origins = origin::constant_origins(&self.spec.spec, &self.instance, &pcode);
+        Ok((pcode, origins))
+    }
+
+    /// The [`ConstantOrigin`] of every constant in this instruction's flat
+    /// p-code, as a side table to the operations
+    /// [`pcode_ops`](Self::pcode_ops) and
+    /// [`pcode_ops_streamed`](Self::pcode_ops_streamed) produce. See
+    /// [`pcode_ops_with_origins`](Self::pcode_ops_with_origins), which also
+    /// returns the operations, for what is reported and how.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`pcode_ops`](Self::pcode_ops).
+    pub fn constant_origins(&self) -> Result<ConstantOrigins, EmitError> {
+        self.pcode_ops_with_origins().map(|(_, origins)| origins)
     }
 
     /// Lowers flat p-code into `sink` without returning an owned

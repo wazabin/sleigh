@@ -117,6 +117,29 @@ impl Expr {
         }
     }
 
+    /// Evaluates the expression in the relativity domain: whether its value
+    /// is a plain number, the instruction's address plus a constant, or
+    /// neither. `atom` classifies each field the way [`eval_fallible`]'s
+    /// evaluator would read it.
+    ///
+    /// This is the abstract counterpart of [`eval_fallible`], over the same
+    /// tree and in the same order; see [`Relativity`] for the rules.
+    ///
+    /// [`eval_fallible`]: Self::eval_fallible
+    pub(crate) fn relativity<F>(&self, atom: &F) -> Relativity
+    where
+        F: Fn(FieldId) -> Relativity,
+    {
+        match self {
+            Expr::Atom(Atom::Int(_)) => Relativity::Number,
+            &Expr::Atom(Atom::Ident(id)) => atom(id),
+            Expr::Unary { op, expr } => Relativity::unary(*op, expr.relativity(atom)),
+            Expr::Binary { op, lhs, rhs } => {
+                Relativity::binary(*op, lhs.relativity(atom), rhs.relativity(atom))
+            }
+        }
+    }
+
     fn fields(&self, set: &mut HashSet<FieldId>) {
         match self {
             Expr::Binary { lhs, rhs, .. } => {
@@ -133,6 +156,50 @@ impl Expr {
             }
 
             Expr::Atom(_) => (),
+        }
+    }
+}
+
+/// What a disassembly-time value is relative to.
+///
+/// The abstract domain [`Expr::relativity`] evaluates alongside the concrete
+/// value: `Number` is a value that does not depend on where the instruction
+/// sits, `InstRelative` one that equals the instruction's address plus a
+/// constant (`inst_start`, `inst_next`, `inst_next + simm32`), and `Mixed` is
+/// everything else that involves the address — `inst_start & ~0xfff`, the sum
+/// of two addresses. The offset of an `InstRelative` value is not carried:
+/// the concrete value already determines it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Relativity {
+    /// Independent of the instruction's address.
+    Number,
+    /// The instruction's address plus a constant.
+    InstRelative,
+    /// Depends on the instruction's address, but not as a fixed offset from
+    /// it. Never to be read as absolute.
+    Mixed,
+}
+
+impl Relativity {
+    /// `relative ± number` stays relative and `relative − relative` is a
+    /// number; any other operator that sees an address — multiplication,
+    /// masking, shifts, the sum of two addresses — loses the offset.
+    pub(crate) fn binary(op: BinOp, lhs: Self, rhs: Self) -> Self {
+        use Relativity::{InstRelative, Mixed, Number};
+        match (op, lhs, rhs) {
+            (_, Number, Number) => Number,
+            (BinOp::Add, InstRelative, Number) | (BinOp::Add, Number, InstRelative) => InstRelative,
+            (BinOp::Sub, InstRelative, Number) => InstRelative,
+            (BinOp::Sub, InstRelative, InstRelative) => Number,
+            _ => Mixed,
+        }
+    }
+
+    /// Negating or complementing an address is no longer an offset from it.
+    pub(crate) fn unary(_: UnOp, value: Self) -> Self {
+        match value {
+            Relativity::Number => Relativity::Number,
+            Relativity::InstRelative | Relativity::Mixed => Relativity::Mixed,
         }
     }
 }
@@ -269,6 +336,90 @@ mod tests {
         assert_eq!(eval(BinOp::Sub, i64::MIN, 1), Some(i64::MAX));
         assert_eq!(eval(BinOp::Mul, i64::MAX, 2), Some(-2));
         assert_eq!(eval_unary(UnOp::Neg, i64::MIN), Some(i64::MIN));
+    }
+
+    /// `<lhs> <op> <rhs>` in the relativity domain.
+    fn rel(op: BinOp, lhs: Relativity, rhs: Relativity) -> Relativity {
+        Relativity::binary(op, lhs, rhs)
+    }
+
+    #[test]
+    fn relativity_follows_the_offset_rules() {
+        use Relativity::{InstRelative as R, Mixed as M, Number as N};
+        let all = [
+            BinOp::Or,
+            BinOp::Xor,
+            BinOp::And,
+            BinOp::Shl,
+            BinOp::Shr,
+            BinOp::Add,
+            BinOp::Sub,
+            BinOp::Mul,
+            BinOp::Div,
+        ];
+        for op in all {
+            assert_eq!(rel(op, N, N), N, "{op:?}");
+            assert_eq!(rel(op, M, N), M, "{op:?}");
+            assert_eq!(rel(op, N, M), M, "{op:?}");
+            assert_eq!(rel(op, M, M), M, "{op:?}");
+            assert_eq!(rel(op, R, M), M, "{op:?}");
+        }
+        assert_eq!(rel(BinOp::Add, R, N), R);
+        assert_eq!(rel(BinOp::Add, N, R), R);
+        assert_eq!(rel(BinOp::Sub, R, N), R);
+        assert_eq!(rel(BinOp::Sub, R, R), N);
+        // A sum of two addresses, and a number minus an address, are not
+        // offsets from one.
+        assert_eq!(rel(BinOp::Add, R, R), M);
+        assert_eq!(rel(BinOp::Sub, N, R), M);
+        for op in [
+            BinOp::Or,
+            BinOp::Xor,
+            BinOp::And,
+            BinOp::Shl,
+            BinOp::Shr,
+            BinOp::Mul,
+            BinOp::Div,
+        ] {
+            assert_eq!(rel(op, R, N), M, "{op:?}");
+            assert_eq!(rel(op, N, R), M, "{op:?}");
+        }
+        assert_eq!(Relativity::unary(UnOp::Neg, R), M);
+        assert_eq!(Relativity::unary(UnOp::Not, R), M);
+        assert_eq!(Relativity::unary(UnOp::Not, N), N);
+    }
+
+    #[test]
+    fn relativity_of_an_expression_reads_its_atoms() {
+        // `(inst_start & ~0xfff) + imm`: AArch64's `adrp`.
+        let page = Expr::Binary {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Binary {
+                op: BinOp::And,
+                lhs: Box::new(Expr::Atom(Atom::Ident(f()))),
+                rhs: Box::new(Expr::Unary {
+                    op: UnOp::Not,
+                    expr: Box::new(Expr::Atom(Atom::Int(0xfff))),
+                }),
+            }),
+            rhs: Box::new(Expr::Atom(Atom::Int(0x1000))),
+        };
+        assert_eq!(
+            page.relativity(&|_| Relativity::InstRelative),
+            Relativity::Mixed
+        );
+        assert_eq!(page.relativity(&|_| Relativity::Number), Relativity::Number);
+
+        // `inst_next + simm32`: x86-64's RIP-relative operand.
+        let rip = Expr::Binary {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Atom(Atom::Ident(f()))),
+            rhs: Box::new(Expr::Atom(Atom::Int(0x10))),
+        };
+        assert_eq!(
+            rip.relativity(&|_| Relativity::InstRelative),
+            Relativity::InstRelative
+        );
     }
 
     #[test]

@@ -108,6 +108,12 @@ Pick the lowest one that answers your question:
 The streamed form hands your sink the plan (every label and branch target in the instruction) before the first operation arrives.
 A consumer can size its state up front and never re-scan.
 
+### Absolute or instruction-relative constants
+
+SLEIGH folds `inst_next + simm32` (x86-64 RIP-relative), `inst_start + 4 * imm` (relative branches) and the like into plain literals.
+[`Instruction::pcode_ops_with_origins`] returns the flat p-code together with a [`ConstantOrigins`] side table that classifies every constant as `Absolute(c)`, `InstRelative { offset_from_inst_start }` or `Mixed(c)`. `Mixed` covers address-dependent values that are not a fixed offset, such as AArch64's `adrp` page, and is never reported as absolute.
+[`Instruction::constant_origins`] returns the table on its own, indexed like the ops that [`Instruction::pcode_ops_streamed`] produces.
+
 ### Skipping the compile
 
 `wazabin-sleigh-precompile` compiles a fixed set of architectures during *its* build and embeds them, so loading is a deserialisation behind a `OnceLock`:
